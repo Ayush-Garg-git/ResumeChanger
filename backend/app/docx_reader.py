@@ -222,22 +222,77 @@ def _collect_warnings(doc: DocumentObject) -> list[str]:
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+# How many non-empty lines from the top we treat as "near the top" when
+# looking for the person's name.
+_NAME_SEARCH_LINES = 3
+
+
+def _looks_like_name_line(paragraph: Paragraph, text: str, position: int) -> bool:
+    """
+    The person's name, styled as Title or Heading 1 near the top.
+
+    Many templates style the name as a heading, which would otherwise make
+    "Riya Mehta" look like a section called "Riya Mehta".
+    """
+    if position >= _NAME_SEARCH_LINES:
+        return False
+    if _normalise(text) in _KEYWORD_TO_SECTION:
+        return False  # "Summary" in Heading 1 is a real heading
+    style = paragraph.style.name if paragraph.style is not None else ""
+    return style in ("Title", "Heading 1")
+
+
+def _ends_word_section(paragraph: Paragraph) -> bool:
+    """True if a Word section break (e.g. end of a two-column block) is here."""
+    ppr = paragraph._p.pPr
+    return ppr is not None and ppr.find(qn("w:sectPr")) is not None
+
+
 def read_resume(path: Path) -> ResumeOutline:
     doc = Document(str(path))
     outline = ResumeOutline(warnings=_collect_warnings(doc))
 
     current_section = TOP_SECTION
+    position = 0             # how many non-empty paragraphs we've seen
+    in_header_block = False  # inside the name / contact block at the top?
+
+    # In multi-column layouts the file order can differ from what you see:
+    # a heading like "SUMMARY" may be stored just BEFORE the name. When that
+    # happens, the heading "waits" and takes effect once the header block ends.
+    waiting_section: str | None = None
+    waited_heading_ids: set[str] = set()
+
+    def end_header_block():
+        nonlocal in_header_block, current_section, waiting_section
+        in_header_block = False
+        if waiting_section:
+            current_section, waiting_section = waiting_section, None
+
     for pid, paragraph, in_table in iter_paragraphs(doc):
         text = paragraph.text
+
         if not text.strip():
-            continue  # skipped, but its ID number is still used up
+            # Empty paragraphs are skipped (their ID number is still used),
+            # but a Word section break here can end the header block.
+            if in_header_block and _ends_word_section(paragraph):
+                end_header_block()
+            continue
 
         heading_section = _section_for_heading(paragraph, text)
-        if heading_section:
-            current_section = heading_section
 
-        if current_section not in outline.sections:
-            outline.sections.append(current_section)
+        if _looks_like_name_line(paragraph, text, position):
+            previous = outline.paragraphs[-1] if outline.paragraphs else None
+            if previous is not None and previous.is_heading:
+                # The heading just before the name has to wait.
+                waiting_section = previous.section
+                waited_heading_ids.add(previous.id)
+            current_section = TOP_SECTION
+            in_header_block = True
+            heading_section = None  # a name is not a section heading
+        elif heading_section:
+            current_section = heading_section
+            in_header_block = False
+            waiting_section = None
 
         outline.paragraphs.append(
             ResumeParagraph(
@@ -250,6 +305,21 @@ def read_resume(path: Path) -> ResumeOutline:
                 style=paragraph.style.name if paragraph.style is not None else "",
             )
         )
+        position += 1
+
+        if in_header_block and _ends_word_section(paragraph):
+            end_header_block()
+
+    # List sections in the order a reader meets them on the page. A heading
+    # that waited doesn't count, so the header block still comes first.
+    for p in outline.paragraphs:
+        if p.id in waited_heading_ids:
+            continue
+        if p.section not in outline.sections:
+            outline.sections.append(p.section)
+    for p in outline.paragraphs:  # a section that only has a heading
+        if p.section not in outline.sections:
+            outline.sections.append(p.section)
 
     if not outline.paragraphs:
         outline.warnings.append(

@@ -115,3 +115,46 @@ def test_header_text_produces_a_warning(sample_resume):
     outline = read_resume(sample_resume)
 
     assert any("header or footer" in w for w in outline.warnings)
+
+
+# --- Real-world layouts -----------------------------------------------------
+# Found while testing a real resume converted from PDF: the name was styled
+# as Heading 1 and the SUMMARY label was stored before it in the file.
+
+def test_name_in_heading_style_is_not_a_section(two_column_resume):
+    outline = read_resume(two_column_resume)
+    name = _by_text(outline, "ARJUN RAO")
+
+    assert not name.is_heading
+    assert name.section == "Header"
+    assert "ARJUN RAO" not in outline.sections
+
+
+def test_header_block_stays_together(two_column_resume):
+    outline = read_resume(two_column_resume)
+
+    assert _by_text(outline, "Computer Science Undergraduate").section == "Header"
+    assert _by_text(outline, "Bengaluru").section == "Header"
+
+
+def test_heading_stored_before_the_name_waits_for_its_content(two_column_resume):
+    outline = read_resume(two_column_resume)
+
+    assert _by_text(outline, "SUMMARY").section == "Summary"
+    assert _by_text(outline, "Developer who builds").section == "Summary"
+    # Order as a reader sees it on the page: header first.
+    assert outline.sections == ["Header", "Summary", "Education", "COMMUNITY & LEADERSHIP"]
+
+
+def test_section_word_in_heading_1_is_still_a_heading(tmp_path):
+    doc = Document()
+    doc.add_paragraph("Meera Iyer")
+    doc.add_heading("Experience", level=1)
+    doc.add_paragraph("Analyst, Example Co")
+    path = tmp_path / "h1.docx"
+    doc.save(str(path))
+
+    outline = read_resume(path)
+
+    assert _by_text(outline, "Experience").is_heading
+    assert outline.sections == ["Header", "Experience"]

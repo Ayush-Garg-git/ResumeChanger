@@ -86,6 +86,52 @@ def build_sample_resume(path: Path) -> Path:
     return path
 
 
+def build_two_column_header_resume(path: Path) -> Path:
+    """
+    A FAKE resume shaped like many PDF-to-Word conversions:
+    - empty lines at the top
+    - the "SUMMARY" label stored BEFORE the name in the file
+    - the name in Heading 1 and a long tagline in Heading 2
+    - the top block in two columns, ended by a section break
+    """
+    from docx.enum.section import WD_SECTION
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    doc = Document()
+    for _ in range(3):
+        doc.add_paragraph("")
+
+    label = doc.add_paragraph()
+    label.add_run("SUMMARY").bold = True
+
+    doc.add_heading("ARJUN RAO", level=1)
+    doc.add_heading(
+        "Computer Science Undergraduate and Full-Stack Developer", level=2
+    )
+    doc.add_paragraph("Bengaluru | arjun.rao@example.com | github.com/example")
+
+    # Make the first Word section two columns, then start a new continuous
+    # section for the rest of the resume.
+    cols = OxmlElement("w:cols")
+    cols.set(qn("w:num"), "2")
+    doc.sections[0]._sectPr.append(cols)
+    doc.add_section(WD_SECTION.CONTINUOUS)
+
+    doc.add_paragraph(
+        "Developer who builds web products end to end, from database design "
+        "to deployment."
+    )
+    doc.add_heading("EDUCATION", level=2)
+    doc.add_paragraph("B.Tech Computer Science, Example Institute")
+    doc.add_heading("COMMUNITY & LEADERSHIP", level=2)
+    doc.add_paragraph("Coding Club | Lead")
+
+    path = Path(path)
+    doc.save(str(path))
+    return path
+
+
 if __name__ == "__main__":
     out = Path(__file__).parent / "sample_resume.docx"
     build_sample_resume(out)
