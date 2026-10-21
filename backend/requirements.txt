@@ -1,0 +1,12 @@
+# Web framework: defines our API routes and validates request/response data
+fastapi==0.115.*
+
+# The server that actually runs the FastAPI app ("[standard]" adds auto-reload support)
+uvicorn[standard]==0.32.*
+
+# Reads settings from backend/.env during development
+python-dotenv==1.0.*
+
+# Testing: pytest runs the tests, httpx lets FastAPI's TestClient make fake requests
+pytest==8.*
+httpx==0.27.*
