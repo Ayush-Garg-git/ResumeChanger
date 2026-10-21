@@ -7,8 +7,8 @@ Tailors an existing DOCX resume to a job description. The AI suggests changes, t
 | Milestone | What it adds | Status |
 |---|---|---|
 | 1 | Project setup, frontend talks to backend | Done |
-| 2 | Resume upload, validation, DOCX text extraction | Next |
-| 3 | Job description input and AI analysis | |
+| 2 | Resume upload, validation, DOCX text extraction | Done |
+| 3 | Job description input and AI analysis | Next |
 | 4 | Suggestions with accept / reject / review | |
 | 5 | Apply approved changes to the original DOCX | |
 | 6 | Before/after preview, page limits, validation | |
@@ -53,8 +53,18 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. You should see a green "Backend connected" bar.
-Stop the backend and press "Try again" to see the error message instead.
+Open http://localhost:5173. You should see a green "Connected" bar and an upload box.
+Upload `backend/samples/sample_resume.docx` (a fake resume) to see the outline.
+
+To rebuild the sample after editing its script: `python -m samples.make_sample_resume` (from `backend/`).
+
+## Privacy in this version
+
+- Uploads are checked: `.docx` only, 5 MB max, must be a real Word file, no macros.
+- Each upload is stored in its own temp folder as `original.docx` and is never modified.
+- Files are deleted when the user clicks Remove, or automatically after 60 minutes.
+- Logs record session IDs and counts only: no file names, no resume text.
+- Nothing is sent to an outside service yet.
 
 ## How the pieces connect
 
@@ -86,11 +96,17 @@ Deploy on Render (free plan): push this repo to GitHub, then in Render choose **
 
 ```
 backend/
-  app/main.py       FastAPI app and routes
-  app/config.py     settings from environment variables
-  tests/            pytest tests
+  app/main.py          FastAPI app and routes
+  app/config.py        settings from environment variables
+  app/validation.py    upload checks (type, size, real DOCX, no macros)
+  app/storage.py       temp session folders and automatic cleanup
+  app/docx_reader.py   paragraphs in reading order, with IDs and sections
+  samples/             fake sample resume and the script that builds it
+  tests/               pytest tests
 frontend/
-  src/api.js        all calls to the backend
-  src/App.jsx       main screen
-  vite.config.js    dev server and /api proxy
+  src/api.js                     all calls to the backend
+  src/App.jsx                    main screen, holds the current state
+  src/components/UploadStep.jsx  upload box
+  src/components/ResumeOutline.jsx  "what we read" view
+  vite.config.js                 dev server and /api proxy
 ```

@@ -10,6 +10,8 @@ committed. `.env.example` shows which variables exist.
 """
 
 import os
+import tempfile
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -23,7 +25,7 @@ class Settings:
 
     # Version of the API. Bump it when the API changes in a way the
     # frontend needs to know about.
-    api_version: str = "0.1.0"
+    api_version: str = "0.2.0"
 
     # Where the frontend runs in development. Only used if someone calls the
     # backend directly from the browser instead of through the Vite proxy.
@@ -32,6 +34,20 @@ class Settings:
     # Folder containing the built frontend (output of `npm run build`).
     # Set only in production (see Dockerfile). Empty in development.
     static_dir: str = os.getenv("STATIC_DIR", "")
+
+    # --- Uploads (Milestone 2) ---
+    # Where uploaded resumes are kept while someone is working on them.
+    # Defaults to the operating system's temp folder, which is the right
+    # place for short-lived files.
+    upload_dir: Path = Path(
+        os.getenv("UPLOAD_DIR", Path(tempfile.gettempdir()) / "resume-refiner")
+    )
+
+    # Largest file we accept. Real resumes are usually well under 1 MB.
+    max_upload_bytes: int = int(os.getenv("MAX_UPLOAD_MB", "5")) * 1024 * 1024
+
+    # How long an uploaded resume is kept before automatic deletion.
+    session_ttl_minutes: int = int(os.getenv("SESSION_TTL_MINUTES", "60"))
 
 
 settings = Settings()

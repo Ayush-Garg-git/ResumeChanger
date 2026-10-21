@@ -11,19 +11,40 @@ async function request(path, options = {}) {
     throw new Error("Could not reach the server. Check your connection.");
   }
 
-  // With the Vite proxy, a stopped backend shows up as a 5xx error
-  // returned by the proxy itself.
-  if (response.status >= 500) {
-    throw new Error(
-      "The backend is not responding. Make sure it is running on port 8000."
-    );
-  }
+  // FastAPI sends errors as {"detail": "message"}. Show that message
+  // when there is one, because the backend writes it for users.
   if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      // The body wasn't JSON (for example, the dev proxy's own error page).
+    }
+    if (detail) throw new Error(detail);
+    if (response.status >= 500) {
+      throw new Error("The server is not responding. Please try again shortly.");
+    }
     throw new Error(`Request failed (${response.status}).`);
   }
+
+  // 204 No Content has no body to read.
+  if (response.status === 204) return null;
   return response.json();
 }
 
 export function checkHealth() {
   return request("/api/health");
+}
+
+export function uploadResume(file) {
+  // FormData is how browsers send files: the same format a normal
+  // <form> upload uses. FastAPI's UploadFile reads it on the other side.
+  const form = new FormData();
+  form.append("file", file);
+  return request("/api/resume", { method: "POST", body: form });
+}
+
+export function deleteResume(sessionId) {
+  return request(`/api/resume/${sessionId}`, { method: "DELETE" });
 }

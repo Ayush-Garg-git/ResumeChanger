@@ -1,41 +1,52 @@
 import { useEffect, useState } from "react";
-import { checkHealth } from "./api.js";
-
-// The workflow from the project brief. In Milestone 1 these are only
-// labels; each one becomes a real screen in later milestones.
-const STEPS = [
-  "Upload resume",
-  "Paste job description",
-  "Analyse",
-  "Review suggestions",
-  "Approve or reject",
-  "Preview",
-  "Download",
-];
+import { checkHealth, deleteResume } from "./api.js";
+import UploadStep from "./components/UploadStep.jsx";
+import ResumeOutline from "./components/ResumeOutline.jsx";
 
 export default function App() {
-  // status is one of: "checking", "ok", "error"
+  // Backend connection: "checking", "ok" or "error"
   const [status, setStatus] = useState("checking");
   const [info, setInfo] = useState(null);
-  const [error, setError] = useState("");
+  const [healthError, setHealthError] = useState("");
+
+  // The uploaded resume. null means nothing is uploaded yet.
+  const [resume, setResume] = useState(null); // { outline, fileName }
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState("");
 
   async function runCheck() {
     setStatus("checking");
-    setError("");
+    setHealthError("");
     try {
-      const data = await checkHealth();
-      setInfo(data);
+      setInfo(await checkHealth());
       setStatus("ok");
     } catch (err) {
-      setError(err.message);
+      setHealthError(err.message);
       setStatus("error");
     }
   }
 
-  // useEffect with an empty list runs once, when the page first loads.
   useEffect(() => {
     runCheck();
   }, []);
+
+  async function handleRemove() {
+    setRemoving(true);
+    setRemoveError("");
+    try {
+      await deleteResume(resume.outline.session_id);
+      setResume(null);
+    } catch (err) {
+      // "already removed" (expired) is fine: the goal was for it to be gone.
+      if (err.message.includes("already removed")) {
+        setResume(null);
+      } else {
+        setRemoveError(err.message);
+      }
+    } finally {
+      setRemoving(false);
+    }
+  }
 
   return (
     <main className="page">
@@ -47,26 +58,46 @@ export default function App() {
         </p>
       </header>
 
-      <section className={`status status-${status}`} aria-live="polite">
-        {status === "checking" && <span>Checking backend connection…</span>}
+      <div className={`status status-${status}`} aria-live="polite">
+        {status === "checking" && <span>Connecting…</span>}
         {status === "ok" && (
           <span>
-            Backend connected · {info.app} v{info.version}
+            Connected · v{info.version}
           </span>
         )}
         {status === "error" && (
           <>
-            <span>{error}</span>
+            <span>{healthError}</span>
             <button onClick={runCheck}>Try again</button>
           </>
         )}
-      </section>
+      </div>
 
-      <ol className="steps">
-        {STEPS.map((step) => (
-          <li key={step}>{step}</li>
-        ))}
-      </ol>
+      {status === "ok" && !resume && (
+        <UploadStep
+          onUploaded={(outline, fileName) => setResume({ outline, fileName })}
+        />
+      )}
+
+      {resume && (
+        <>
+          {removeError && (
+            <p className="message message-error" role="alert">
+              {removeError}
+            </p>
+          )}
+          <ResumeOutline
+            outline={resume.outline}
+            fileName={resume.fileName}
+            onRemove={handleRemove}
+            removing={removing}
+          />
+          <section className="card card-next">
+            <h2>2. Paste the job description</h2>
+            <p className="muted">Coming in Milestone 3.</p>
+          </section>
+        </>
+      )}
     </main>
   );
 }
