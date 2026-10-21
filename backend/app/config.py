@@ -29,5 +29,9 @@ class Settings:
     # backend directly from the browser instead of through the Vite proxy.
     frontend_origin: str = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 
+    # Folder containing the built frontend (output of `npm run build`).
+    # Set only in production (see Dockerfile). Empty in development.
+    static_dir: str = os.getenv("STATIC_DIR", "")
+
 
 settings = Settings()

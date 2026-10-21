@@ -8,7 +8,10 @@ Run it with:
 variable called `app`.
 """
 
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 
@@ -34,3 +37,16 @@ def health() -> dict:
         "app": settings.app_name,
         "version": settings.api_version,
     }
+
+
+# --- Serving the frontend in production ------------------------------------
+# In development, Vite serves the React app and forwards /api to us.
+# In production there is no Vite: `npm run build` turns the React app into
+# plain HTML/CSS/JS files, and FastAPI serves those files itself. The whole
+# app then runs as one service at one URL.
+#
+# This block must stay at the bottom: routes defined above (all /api/...)
+# are matched first, and anything else falls through to the frontend files.
+# If the build folder doesn't exist (normal in development), we skip it.
+if settings.static_dir and Path(settings.static_dir).is_dir():
+    app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="frontend")

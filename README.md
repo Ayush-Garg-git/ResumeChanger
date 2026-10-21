@@ -64,6 +64,24 @@ Browser  ->  Vite dev server (5173)  --/api/*-->  FastAPI (8000)
 
 The Vite dev server forwards every `/api/...` request to FastAPI (see `frontend/vite.config.js`), so the browser only talks to one address and no CORS setup is needed.
 
+## Production and deployment
+
+In production there is no Vite server. The `Dockerfile` builds the React app into static files and FastAPI serves them alongside the API, so the whole app is **one service at one URL**:
+
+```
+Browser  ->  FastAPI  (/api/* = API, everything else = built React files)
+```
+
+Try production mode locally without Docker:
+
+```bash
+cd frontend && npm run build && cd ../backend
+STATIC_DIR=../frontend/dist uvicorn app.main:app --port 9000
+# open http://localhost:9000
+```
+
+Deploy on Render (free plan): push this repo to GitHub, then in Render choose **New > Blueprint**, pick the repo, and confirm. Render reads `render.yaml`, builds the `Dockerfile`, and redeploys on every push to `main`. The free plan sleeps when idle, so the first visit after a while takes extra time to wake up.
+
 ## Project layout
 
 ```
