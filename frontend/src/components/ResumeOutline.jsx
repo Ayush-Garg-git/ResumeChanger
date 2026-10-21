@@ -5,7 +5,7 @@ function Tag({ children }) {
   return <span className="tag">{children}</span>;
 }
 
-export default function ResumeOutline({ outline, fileName, onRemove, removing }) {
+export default function ResumeOutline({ outline, fileName, onRemove, removing, collapsed }) {
   // Group paragraphs by section, keeping the order they appear in.
   const groups = outline.sections.map((section) => ({
     section,
@@ -41,6 +41,8 @@ export default function ResumeOutline({ outline, fileName, onRemove, removing })
         changed.
       </p>
 
+      <details className="outline-toggle" open={!collapsed}>
+        <summary>Show paragraphs</summary>
       {groups.map(({ section, paragraphs }) => (
         <div key={section} className="outline-section">
           <h3>{section}</h3>
@@ -59,6 +61,7 @@ export default function ResumeOutline({ outline, fileName, onRemove, removing })
           </ul>
         </div>
       ))}
+      </details>
     </section>
   );
 }

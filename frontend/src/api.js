@@ -45,6 +45,14 @@ export function uploadResume(file) {
   return request("/api/resume", { method: "POST", body: form });
 }
 
+export function analyzeResume(sessionId, jobDescription, consent) {
+  return request(`/api/resume/${sessionId}/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_description: jobDescription, consent }),
+  });
+}
+
 export function deleteResume(sessionId) {
   return request(`/api/resume/${sessionId}`, { method: "DELETE" });
 }

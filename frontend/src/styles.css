@@ -250,3 +250,234 @@ h3 {
   color: var(--muted);
   border: 1px solid var(--border);
 }
+
+/* ---- Milestone 3: job description and analysis ---- */
+:root {
+  --add: #1f7a4d;
+  --add-bg: #dff3e7;
+  --del: #b42318;
+  --del-bg: #fbe4e1;
+}
+
+.small {
+  font-size: 12px;
+}
+
+.outline-toggle > summary,
+.block > summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 8px;
+}
+
+.jd-input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.jd-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.counter {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.counter-bad {
+  color: var(--err);
+}
+
+.consent {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--accent-bg);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.consent p {
+  margin: 0 0 10px;
+}
+
+.consent-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.consent-check input {
+  margin-top: 3px;
+}
+
+.button-primary {
+  margin-top: 16px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.message-ok {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.block {
+  margin-top: 18px;
+}
+
+.block-title {
+  margin: 20px 0 8px;
+}
+
+.req-list,
+.suggestion-list,
+.questions,
+.dropped {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.req-list li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.req-text {
+  flex: 1;
+}
+
+.cov {
+  flex: 0 0 92px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.cov-clear {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.cov-partial {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.cov-missing {
+  color: var(--err);
+  background: var(--err-bg);
+}
+
+.suggestion {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 10px;
+}
+
+.suggestion-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.kind {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.kind-consider_removing,
+.kind-review {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.label {
+  margin: 8px 0 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.original,
+.diff {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.original {
+  color: var(--muted);
+}
+
+.diff-removed {
+  background: var(--del-bg);
+  color: var(--del);
+  text-decoration: line-through;
+  margin-right: 3px;
+}
+
+.diff-added {
+  background: var(--add-bg);
+  color: var(--add);
+}
+
+.reason {
+  margin: 10px 0 0;
+  font-size: 14px;
+}
+
+.questions li {
+  padding: 8px 12px;
+  margin-bottom: 6px;
+  border-left: 3px solid var(--accent);
+  background: var(--bg);
+  font-size: 14px;
+}
+
+.dropped li {
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}

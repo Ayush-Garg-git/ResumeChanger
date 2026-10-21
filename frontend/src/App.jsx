@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { checkHealth, deleteResume } from "./api.js";
 import UploadStep from "./components/UploadStep.jsx";
 import ResumeOutline from "./components/ResumeOutline.jsx";
+import JobDescriptionStep from "./components/JobDescriptionStep.jsx";
+import AnalysisView from "./components/AnalysisView.jsx";
 
 export default function App() {
   // Backend connection: "checking", "ok" or "error"
@@ -13,6 +15,9 @@ export default function App() {
   const [resume, setResume] = useState(null); // { outline, fileName }
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState("");
+
+  // The AI's analysis for the current job description. null until analysed.
+  const [analysis, setAnalysis] = useState(null);
 
   async function runCheck() {
     setStatus("checking");
@@ -36,10 +41,12 @@ export default function App() {
     try {
       await deleteResume(resume.outline.session_id);
       setResume(null);
+      setAnalysis(null);
     } catch (err) {
       // "already removed" (expired) is fine: the goal was for it to be gone.
       if (err.message.includes("already removed")) {
         setResume(null);
+        setAnalysis(null);
       } else {
         setRemoveError(err.message);
       }
@@ -91,11 +98,18 @@ export default function App() {
             fileName={resume.fileName}
             onRemove={handleRemove}
             removing={removing}
+            collapsed={analysis !== null}
           />
-          <section className="card card-next">
-            <h2>2. Paste the job description</h2>
-            <p className="muted">Coming in Milestone 3.</p>
-          </section>
+          {!analysis && (
+            <JobDescriptionStep
+              sessionId={resume.outline.session_id}
+              ai={info?.ai}
+              onAnalysed={setAnalysis}
+            />
+          )}
+          {analysis && (
+            <AnalysisView analysis={analysis} onStartOver={() => setAnalysis(null)} />
+          )}
         </>
       )}
     </main>

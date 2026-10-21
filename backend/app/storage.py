@@ -14,6 +14,7 @@ There is no database. A session is just a folder, and it is deleted when
 the user removes it or when it is older than `session_ttl_minutes`.
 """
 
+import json
 import re
 import shutil
 import time
@@ -53,6 +54,23 @@ def original_path(session_id: str) -> Path | None:
     """Path to the untouched uploaded file, or None if the session is gone."""
     path = _session_dir(session_id) / ORIGINAL_NAME
     return path if path.is_file() else None
+
+
+def save_json(session_id: str, name: str, data: dict) -> None:
+    """Save a small JSON file (e.g. the AI analysis) next to the original."""
+    (_session_dir(session_id) / name).write_text(json.dumps(data), encoding="utf-8")
+
+
+def load_json(session_id: str, name: str) -> dict | None:
+    path = _session_dir(session_id) / name
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def touch_session(session_id: str) -> None:
+    """Mark a session as recently used, so it isn't cleaned up mid-work."""
+    _session_dir(session_id).touch()
 
 
 def delete_session(session_id: str) -> bool:

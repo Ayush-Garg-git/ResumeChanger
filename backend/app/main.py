@@ -15,8 +15,11 @@ from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 from app import storage
+from app.analyzer import AIError, analyse, paragraphs_to_send
 from app.config import settings
 from app.docx_reader import read_resume
+from app.schemas import AnalyzeRequest
+from app.suggestion_checks import check_suggestions, clean_evidence
 from app.validation import UploadError, validate_docx_upload
 
 # Privacy rule for logs: record what happened (IDs, counts, error types),
@@ -45,6 +48,13 @@ def health() -> dict:
         "status": "ok",
         "app": settings.app_name,
         "version": settings.api_version,
+        # Lets the frontend show an accurate privacy notice before analysis.
+        "ai": {
+            "configured": bool(settings.gemini_api_key),
+            "provider": "Google Gemini",
+            "model": settings.gemini_model,
+            "tier": settings.gemini_tier,
+        },
     }
 
 
@@ -91,6 +101,79 @@ async def upload_resume(file: UploadFile = File(...)) -> dict:
         "expires_in_minutes": settings.session_ttl_minutes,
         **outline.to_dict(),
     }
+
+
+# A plain `def` (not `async def`): the AI call blocks while waiting, and
+# FastAPI runs plain functions in a worker thread so other requests continue.
+@app.post("/api/resume/{session_id}/analyze")
+def analyze_resume(session_id: str, body: AnalyzeRequest) -> dict:
+    """
+    Compare the uploaded resume with a job description using the AI.
+
+    Returns suggestions only. Nothing in the document is changed here.
+    """
+    if not storage.is_valid_session_id(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session ID.")
+    original = storage.original_path(session_id)
+    if original is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Your resume was removed or has expired. Please upload it again.",
+        )
+
+    # The user must agree, every time, before their resume leaves the server.
+    if not body.consent:
+        raise HTTPException(
+            status_code=400,
+            detail="Please confirm that your resume may be sent to the AI service.",
+        )
+
+    job_description = body.job_description.strip()
+    if len(job_description) < settings.job_description_min_chars:
+        raise HTTPException(
+            status_code=400,
+            detail="The job description looks too short. Please paste the full posting.",
+        )
+    if len(job_description) > settings.job_description_max_chars:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The job description is too long (over {settings.job_description_max_chars} characters).",
+        )
+
+    outline = read_resume(original)
+    sent = paragraphs_to_send(outline)
+    if not sent:
+        raise HTTPException(status_code=400, detail="We couldn't find resume content to analyse.")
+
+    storage.touch_session(session_id)
+    try:
+        analysis = analyse(outline, job_description)
+    except AIError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.message)
+
+    suggestions, dropped = check_suggestions(analysis, sent, job_description)
+    analysis = clean_evidence(analysis, sent)
+
+    # Give each kept suggestion a short ID for the approve/reject step.
+    result = {
+        "role_title": analysis.role_title,
+        "fit_summary": analysis.fit_summary,
+        "requirements": [r.model_dump() for r in analysis.requirements],
+        "suggestions": [
+            {"id": f"s{i + 1}", **s.model_dump()} for i, s in enumerate(suggestions)
+        ],
+        "dropped": [d.__dict__ for d in dropped],
+        "questions_for_user": analysis.questions_for_user,
+        "no_changes_needed": analysis.no_changes_needed and not suggestions,
+        "model": settings.gemini_model,
+    }
+    storage.save_json(session_id, "analysis.json", result)
+
+    logger.info(
+        "Session %s analysed: %d suggestions kept, %d dropped, %d questions",
+        session_id, len(suggestions), len(dropped), len(analysis.questions_for_user),
+    )
+    return result
 
 
 @app.delete("/api/resume/{session_id}", status_code=204)

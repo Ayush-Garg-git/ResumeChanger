@@ -9,3 +9,13 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     autoDeploy: true
+    envVars:
+      # Secret: set its value in Render > resume-refiner > Environment.
+      # `sync: false` means the value is never stored in this file.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
+      # Shown to users in the privacy notice. Change to "paid" with a paid key.
+      - key: GEMINI_TIER
+        value: free

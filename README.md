@@ -8,8 +8,8 @@ Tailors an existing DOCX resume to a job description. The AI suggests changes, t
 |---|---|---|
 | 1 | Project setup, frontend talks to backend | Done |
 | 2 | Resume upload, validation, DOCX text extraction | Done |
-| 3 | Job description input and AI analysis | Next |
-| 4 | Suggestions with accept / reject / review | |
+| 3 | Job description input and AI analysis | Done |
+| 4 | Suggestions with accept / reject / review | Next |
 | 5 | Apply approved changes to the original DOCX | |
 | 6 | Before/after preview, page limits, validation | |
 | 7 | Testing, error handling, privacy, deployment | |
@@ -43,6 +43,15 @@ Run the tests (with the virtual environment active):
 pytest
 ```
 
+### AI key (Milestone 3)
+
+1. Create a key at https://aistudio.google.com ("Get API key").
+2. Put it in `backend/.env` as `GEMINI_API_KEY=...` (copied from `.env.example`). Never commit `.env`.
+3. For the live site: Render > resume-refiner > Environment > add `GEMINI_API_KEY`.
+
+Without a key, the app still runs; the analyse button explains that AI isn't set up.
+Tests never call the real AI: they replace it with a stand-in.
+
 ## Run the frontend
 
 In a second terminal:
@@ -64,7 +73,9 @@ To rebuild the sample after editing its script: `python -m samples.make_sample_r
 - Each upload is stored in its own temp folder as `original.docx` and is never modified.
 - Files are deleted when the user clicks Remove, or automatically after 60 minutes.
 - Logs record session IDs and counts only: no file names, no resume text.
-- Nothing is sent to an outside service yet.
+- AI analysis (Milestone 3) runs only after the user ticks a consent box that names the provider and tier.
+- The Header block (name, contact details) is never sent to the AI. Emails, phone numbers and links elsewhere are masked.
+- AI suggestions pass through `suggestion_checks.py`, which drops any that point at unknown paragraphs, misquote the original, add numbers, or add tool/skill names the resume doesn't mention.
 
 ## How the pieces connect
 
@@ -101,6 +112,9 @@ backend/
   app/validation.py    upload checks (type, size, real DOCX, no macros)
   app/storage.py       temp session folders and automatic cleanup
   app/docx_reader.py   paragraphs in reading order, with IDs and sections
+  app/schemas.py       shape of the AI's answer (also sent to Gemini as its schema)
+  app/analyzer.py      prompt, privacy masking, the Gemini call (only file that knows the provider)
+  app/suggestion_checks.py  safety net that drops invented or unsafe suggestions
   samples/             fake sample resume and the script that builds it
   tests/               pytest tests
 frontend/
@@ -108,5 +122,8 @@ frontend/
   src/App.jsx                    main screen, holds the current state
   src/components/UploadStep.jsx  upload box
   src/components/ResumeOutline.jsx  "what we read" view
+  src/components/JobDescriptionStep.jsx  job description box and consent
+  src/components/AnalysisView.jsx  requirements, suggestions, questions
+  src/diff.js                    word-level highlighting of changes
   vite.config.js                 dev server and /api proxy
 ```

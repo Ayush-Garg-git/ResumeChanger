@@ -25,7 +25,7 @@ class Settings:
 
     # Version of the API. Bump it when the API changes in a way the
     # frontend needs to know about.
-    api_version: str = "0.2.0"
+    api_version: str = "0.3.0"
 
     # Where the frontend runs in development. Only used if someone calls the
     # backend directly from the browser instead of through the Vite proxy.
@@ -48,6 +48,26 @@ class Settings:
 
     # How long an uploaded resume is kept before automatic deletion.
     session_ttl_minutes: int = int(os.getenv("SESSION_TTL_MINUTES", "60"))
+
+    # --- AI analysis (Milestone 3) ---
+    # The key comes ONLY from the environment: backend/.env locally,
+    # Render's Environment settings in production. Never commit it.
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+
+    # Best model on the Gemini free tier as of October 2026. Change it here
+    # (or in .env) to upgrade, e.g. to a paid model, without code changes.
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+
+    # Shown to users before they send anything, so it must be accurate.
+    # Set to "paid" once you use a paid Gemini key.
+    gemini_tier: str = os.getenv("GEMINI_TIER", "free")
+
+    # Seconds to wait for the AI before giving up.
+    ai_timeout_seconds: float = float(os.getenv("AI_TIMEOUT_SECONDS", "90"))
+
+    # Job description length limits (characters).
+    job_description_min_chars: int = 80
+    job_description_max_chars: int = 15000
 
 
 settings = Settings()
