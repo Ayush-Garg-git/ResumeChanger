@@ -8,6 +8,23 @@
 //   [{ type: "same", text: "Built a" }, { type: "removed", text: "dashboard" },
 //    { type: "added", text: "sales dashboard" }, ...]
 
+// For "Emphasise" suggestions (same words, new order): which comma-separated
+// items moved earlier? "Tools: Excel, Power BI, Git" -> "Tools: Power BI, Excel, Git"
+// gives ["Power BI"]. Returns [] if the line isn't a simple list.
+export function movedToFront(before, after) {
+  const items = (text) => {
+    const body = text.includes(":") ? text.slice(text.indexOf(":") + 1) : text;
+    return body.split(",").map((s) => s.trim()).filter(Boolean);
+  };
+  const a = items(before);
+  const b = items(after);
+  if (a.length < 2 || a.length !== b.length) return [];
+  return b.filter((item, newIndex) => {
+    const oldIndex = a.indexOf(item);
+    return oldIndex > newIndex;
+  });
+}
+
 export function diffWords(before, after) {
   const a = before.split(/(\s+)/).filter(Boolean); // keep spaces as tokens
   const b = after.split(/(\s+)/).filter(Boolean);

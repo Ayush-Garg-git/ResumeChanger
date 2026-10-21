@@ -53,6 +53,15 @@ export function analyzeResume(sessionId, jobDescription, consent) {
   });
 }
 
+// action: "accept" | "reject" | "edit" | "undecided". text is only for "edit".
+export function decideSuggestion(sessionId, suggestionId, action, text = null) {
+  return request(`/api/resume/${sessionId}/suggestions/${suggestionId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, text }),
+  });
+}
+
 export function deleteResume(sessionId) {
   return request(`/api/resume/${sessionId}`, { method: "DELETE" });
 }

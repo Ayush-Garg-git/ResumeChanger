@@ -9,7 +9,8 @@ Tailors an existing DOCX resume to a job description. The AI suggests changes, t
 | 1 | Project setup, frontend talks to backend | Done |
 | 2 | Resume upload, validation, DOCX text extraction | Done |
 | 3 | Job description input and AI analysis | Done |
-| 4 | Suggestions with accept / reject / review | Next |
+| 4 | Suggestions with accept / reject / review | Done |
+| 4b | Answer questions to add confirmed skills | Next |
 | 5 | Apply approved changes to the original DOCX | |
 | 6 | Before/after preview, page limits, validation | |
 | 7 | Testing, error handling, privacy, deployment | |
@@ -115,6 +116,7 @@ backend/
   app/schemas.py       shape of the AI's answer (also sent to Gemini as its schema)
   app/analyzer.py      prompt, privacy masking, the Gemini call (only file that knows the provider)
   app/suggestion_checks.py  safety net that drops invented or unsafe suggestions
+  app/decisions.py     accept / reject / edit rules and the summary of what will change
   samples/             fake sample resume and the script that builds it
   tests/               pytest tests
 frontend/
@@ -124,6 +126,8 @@ frontend/
   src/components/ResumeOutline.jsx  "what we read" view
   src/components/JobDescriptionStep.jsx  job description box and consent
   src/components/AnalysisView.jsx  requirements, suggestions, questions
+  src/components/SuggestionCard.jsx  one suggestion with Accept / Edit / Reject
+  src/components/DecisionSummary.jsx  counts and the list of what will be applied
   src/diff.js                    word-level highlighting of changes
   vite.config.js                 dev server and /api proxy
 ```

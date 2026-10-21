@@ -75,6 +75,12 @@ class ResumeAnalysis(BaseModel):
 # --------------------------------------------------------------------------
 # What the frontend sends
 # --------------------------------------------------------------------------
+class DecisionRequest(BaseModel):
+    action: Literal["accept", "reject", "edit", "undecided"]
+    # Only for "edit": the user's own version of the line.
+    text: Optional[str] = None
+
+
 class AnalyzeRequest(BaseModel):
     job_description: str
     # The user ticked "I understand my resume will be sent to Google Gemini".

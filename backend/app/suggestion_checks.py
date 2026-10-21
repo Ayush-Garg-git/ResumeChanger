@@ -17,6 +17,7 @@ What we check (each maps to a rule in the project brief):
 """
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 from app.analyzer import PLACEHOLDERS, redact
@@ -89,6 +90,12 @@ def invented_terms(proposed: str, resume_tokens: set[str], job_description: str)
     return sorted(suspicious)
 
 
+def same_words(a: str, b: str) -> bool:
+    """True if both texts use exactly the same words, in any order."""
+    words = lambda t: Counter(re.findall(r"[\w+#.]+", t.casefold()))  # noqa: E731
+    return words(a) == words(b)
+
+
 def check_suggestions(
     analysis: ResumeAnalysis,
     sent_paragraphs: list[ResumeParagraph],
@@ -154,6 +161,10 @@ def check_suggestions(
             if s.kind == "shorten" and len(proposed) >= len(original):
                 drop(s, "It was marked 'shorten' but wasn't shorter.")
                 continue
+            if s.kind == "emphasise" and not same_words(original, proposed):
+                # "Emphasise" promises the same words in a new order. If words
+                # changed, show it honestly as a reword instead.
+                s = s.model_copy(update={"kind": "reword"})
             s = s.model_copy(update={"proposed_text": proposed})
 
         # Keep the real paragraph text (not the AI's copy) for display.

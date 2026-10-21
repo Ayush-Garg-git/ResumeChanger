@@ -481,3 +481,154 @@ h3 {
   color: var(--muted);
   border-bottom: 1px solid var(--border);
 }
+
+/* ---- Milestone 4: decisions ---- */
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.btn-primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-danger {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.btn-chosen {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--surface);
+}
+
+.btn-link {
+  border: none;
+  background: none;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.suggestion.decided-change {
+  border-color: var(--ok);
+}
+
+.suggestion.decided-remove {
+  border-color: var(--err);
+}
+
+.suggestion.decided-keep {
+  opacity: 0.75;
+}
+
+.status-pill {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.pill-change {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.pill-remove {
+  color: var(--err);
+  background: var(--err-bg);
+}
+
+.pill-keep {
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.moved {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.edit-box {
+  margin-top: 12px;
+}
+
+.edit-box .muted {
+  margin-top: 4px;
+}
+
+.decision-summary {
+  position: sticky;
+  bottom: 0;
+  margin: 20px -20px -20px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 12px 12px;
+  box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.05);
+}
+
+.summary-counts {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+
+.summary-counts .undecided {
+  color: var(--warn);
+}
+
+.decision-summary details {
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.decision-summary summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.apply-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.apply-list li {
+  margin-bottom: 4px;
+}
+
+.decision-summary > .muted {
+  margin-top: 8px;
+}

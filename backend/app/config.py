@@ -25,7 +25,7 @@ class Settings:
 
     # Version of the API. Bump it when the API changes in a way the
     # frontend needs to know about.
-    api_version: str = "0.3.0"
+    api_version: str = "0.4.0"
 
     # Where the frontend runs in development. Only used if someone calls the
     # backend directly from the browser instead of through the Vite proxy.

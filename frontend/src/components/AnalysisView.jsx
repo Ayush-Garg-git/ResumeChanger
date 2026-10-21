@@ -1,12 +1,7 @@
-import { diffWords } from "../diff.js";
-
-const KIND_LABELS = {
-  shorten: "Shorten",
-  reword: "Reword",
-  emphasise: "Emphasise",
-  consider_removing: "Consider removing",
-  review: "Review",
-};
+import { useState } from "react";
+import { decideSuggestion } from "../api.js";
+import SuggestionCard from "./SuggestionCard.jsx";
+import DecisionSummary from "./DecisionSummary.jsx";
 
 const COVERAGE_LABELS = {
   clear: "Shown",
@@ -14,52 +9,26 @@ const COVERAGE_LABELS = {
   missing: "Not shown",
 };
 
-function Diff({ before, after }) {
-  return (
-    <p className="diff">
-      {diffWords(before, after).map((part, i) => (
-        <span key={i} className={`diff-${part.type}`}>
-          {part.text}
-        </span>
-      ))}
-    </p>
-  );
-}
-
-function SuggestionCard({ s }) {
-  const rewrites = s.proposed_text !== null;
-  return (
-    <li className="suggestion">
-      <div className="suggestion-head">
-        <span className={`kind kind-${s.kind}`}>{KIND_LABELS[s.kind]}</span>
-        <code className="pid">{s.paragraph_id}</code>
-        {s.requirement && <span className="muted small">for: {s.requirement}</span>}
-      </div>
-
-      {rewrites ? (
-        <>
-          <p className="label">Original</p>
-          <p className="original">{s.original_text}</p>
-          <p className="label">Proposed (changes highlighted)</p>
-          <Diff before={s.original_text} after={s.proposed_text} />
-        </>
-      ) : (
-        <>
-          <p className="label">Line</p>
-          <p className="original">{s.original_text}</p>
-        </>
-      )}
-
-      <p className="reason">
-        <strong>Why: </strong>
-        {s.reason}
-      </p>
-    </li>
-  );
-}
-
-export default function AnalysisView({ analysis, onStartOver }) {
+export default function AnalysisView({ sessionId, analysis, onStartOver }) {
   const { suggestions, requirements, dropped, questions_for_user: questions } = analysis;
+
+  // Decisions as saved by the server: { s1: {action, effect, final_text}, ... }
+  // Missing means "not decided", which means the line stays unchanged.
+  const [decisions, setDecisions] = useState({});
+  const [summary, setSummary] = useState(null);
+
+  async function decide(suggestionId, action, text) {
+    // The server checks the decision first; we only update the screen
+    // once it has been saved. Errors are shown on the card.
+    const result = await decideSuggestion(sessionId, suggestionId, action, text);
+    setDecisions((prev) => {
+      const next = { ...prev };
+      if (result.decision) next[suggestionId] = result.decision;
+      else delete next[suggestionId];
+      return next;
+    });
+    setSummary(result.summary);
+  }
 
   return (
     <section className="card">
@@ -104,13 +73,9 @@ export default function AnalysisView({ analysis, onStartOver }) {
           <h3 className="block-title">Suggested changes ({suggestions.length})</h3>
           <ul className="suggestion-list">
             {suggestions.map((s) => (
-              <SuggestionCard key={s.id} s={s} />
+              <SuggestionCard key={s.id} s={s} decision={decisions[s.id]} onDecide={decide} />
             ))}
           </ul>
-          <p className="note">
-            Nothing has been changed in your file. Approving or rejecting each suggestion
-            comes in the next step (Milestone 4).
-          </p>
         </>
       )}
 
@@ -143,6 +108,10 @@ export default function AnalysisView({ analysis, onStartOver }) {
             ))}
           </ul>
         </details>
+      )}
+
+      {suggestions.length > 0 && (
+        <DecisionSummary total={suggestions.length} summary={summary} />
       )}
     </section>
   );

@@ -108,7 +108,11 @@ export default function App() {
             />
           )}
           {analysis && (
-            <AnalysisView analysis={analysis} onStartOver={() => setAnalysis(null)} />
+            <AnalysisView
+              sessionId={resume.outline.session_id}
+              analysis={analysis}
+              onStartOver={() => setAnalysis(null)}
+            />
           )}
         </>
       )}

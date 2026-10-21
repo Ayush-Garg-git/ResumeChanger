@@ -167,3 +167,21 @@ def test_ordinary_new_words_are_fine(sample_resume):
         _suggest("p10", P10, "Built a Power BI dashboard that regional managers used each week to track sales."),
     )
     assert len(kept) == 1, dropped
+
+
+# --- Emphasise must only reorder (Milestone 4) ------------------------------
+
+def test_emphasise_that_only_reorders_stays_emphasise(sample_resume):
+    kept, _ = _run(
+        sample_resume,
+        _suggest("p7", "Tools: Excel, Power BI, Git", "Tools: Power BI, Excel, Git", kind="emphasise"),
+    )
+    assert kept[0].kind == "emphasise"
+
+
+def test_emphasise_that_changes_words_becomes_reword(sample_resume):
+    kept, _ = _run(
+        sample_resume,
+        _suggest("p7", "Tools: Excel, Power BI, Git", "Tools: Power BI, Excel", kind="emphasise"),
+    )
+    assert kept[0].kind == "reword"

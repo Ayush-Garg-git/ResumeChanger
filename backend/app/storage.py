@@ -68,6 +68,10 @@ def load_json(session_id: str, name: str) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def delete_json(session_id: str, name: str) -> None:
+    (_session_dir(session_id) / name).unlink(missing_ok=True)
+
+
 def touch_session(session_id: str) -> None:
     """Mark a session as recently used, so it isn't cleaned up mid-work."""
     _session_dir(session_id).touch()

@@ -18,7 +18,8 @@ from app import storage
 from app.analyzer import AIError, analyse, paragraphs_to_send
 from app.config import settings
 from app.docx_reader import read_resume
-from app.schemas import AnalyzeRequest
+from app.decisions import DecisionError, make_decision, summarise
+from app.schemas import AnalyzeRequest, DecisionRequest
 from app.suggestion_checks import check_suggestions, clean_evidence
 from app.validation import UploadError, validate_docx_upload
 
@@ -168,12 +169,61 @@ def analyze_resume(session_id: str, body: AnalyzeRequest) -> dict:
         "model": settings.gemini_model,
     }
     storage.save_json(session_id, "analysis.json", result)
+    # A new analysis has new suggestions, so earlier decisions no longer apply.
+    storage.delete_json(session_id, "decisions.json")
 
     logger.info(
         "Session %s analysed: %d suggestions kept, %d dropped, %d questions",
         session_id, len(suggestions), len(dropped), len(analysis.questions_for_user),
     )
     return result
+
+
+def _load_analysis(session_id: str) -> dict:
+    """Shared checks for the decision routes."""
+    if not storage.is_valid_session_id(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session ID.")
+    if storage.original_path(session_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Your resume was removed or has expired. Please upload it again.",
+        )
+    analysis = storage.load_json(session_id, "analysis.json")
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Please analyse your resume first.")
+    return analysis
+
+
+@app.put("/api/resume/{session_id}/suggestions/{suggestion_id}")
+def decide_suggestion(session_id: str, suggestion_id: str, body: DecisionRequest) -> dict:
+    """Save the user's decision on one suggestion. Nothing is applied yet."""
+    analysis = _load_analysis(session_id)
+    suggestion = next((s for s in analysis["suggestions"] if s["id"] == suggestion_id), None)
+    if suggestion is None:
+        raise HTTPException(status_code=404, detail="That suggestion no longer exists.")
+
+    try:
+        decision = make_decision(suggestion, body.action, body.text)
+    except DecisionError as err:
+        raise HTTPException(status_code=400, detail=err.message)
+
+    decisions = storage.load_json(session_id, "decisions.json") or {}
+    if decision is None:
+        decisions.pop(suggestion_id, None)
+    else:
+        decisions[suggestion_id] = decision
+    storage.save_json(session_id, "decisions.json", decisions)
+    storage.touch_session(session_id)
+
+    return {"decision": decision, "summary": summarise(analysis, decisions)}
+
+
+@app.get("/api/resume/{session_id}/decisions")
+def get_decisions(session_id: str) -> dict:
+    """Everything decided so far, and the list of changes that would be applied."""
+    analysis = _load_analysis(session_id)
+    decisions = storage.load_json(session_id, "decisions.json") or {}
+    return {"decisions": decisions, "summary": summarise(analysis, decisions)}
 
 
 @app.delete("/api/resume/{session_id}", status_code=204)
