@@ -29,7 +29,9 @@ export default function AnalysisView({ sessionId, fileName, analysis, ai, onAnal
     // once it has been saved. Errors are shown on the card.
     const result = await decideSuggestion(sessionId, analysis.analysis_id, suggestionId, action, text);
     setDecisions((prev) => {
-      const next = { ...prev };
+      // `changed`: other cards for the same line that this decision replaced
+      // (e.g. your own Edit replaces an earlier accepted change).
+      const next = { ...prev, ...(result.changed ?? {}) };
       if (result.decision) next[suggestionId] = result.decision;
       else delete next[suggestionId];
       return next;

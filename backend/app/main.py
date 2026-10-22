@@ -363,19 +363,33 @@ def decide_suggestion(session_id: str, suggestion_id: str, body: DecisionRequest
         decisions = _load_decisions(session_id, analysis)
 
         # Two changes to the same line can't both be applied: the second
-        # would no longer match the line's text. Ask the user to choose.
+        # would no longer match the line's text.
+        # - Accepting a second one is refused: the user must choose.
+        # - Saving their OWN version with Edit is that choice: it replaces
+        #   the other change for this line, which goes back to "keep".
+        cleared = []
         if decision is not None and decision["effect"] in ("change", "remove"):
-            for other_id, other in decisions["items"].items():
-                if (
-                    other_id != suggestion_id
-                    and other["paragraph_id"] == suggestion["paragraph_id"]
-                    and other["effect"] in ("change", "remove")
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"You already chose a change for this line ({other_id}). "
-                        "Undo that one first, or use Edit here to combine both in your own words.",
-                    )
+            conflicts = [
+                other_id
+                for other_id, other in decisions["items"].items()
+                if other_id != suggestion_id
+                and other["paragraph_id"] == suggestion["paragraph_id"]
+                and other["effect"] in ("change", "remove")
+            ]
+            if conflicts and body.action != "edit":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"You already chose a change for this line ({conflicts[0]}). "
+                    "Undo that one first, or use Edit here to combine both in your own words.",
+                )
+            for other_id in conflicts:
+                decisions["items"][other_id] = {
+                    "paragraph_id": suggestion["paragraph_id"],
+                    "action": "reject",
+                    "effect": "keep",
+                    "final_text": None,
+                }
+                cleared.append(other_id)
 
         if decision is None:
             decisions["items"].pop(suggestion_id, None)
@@ -387,7 +401,12 @@ def decide_suggestion(session_id: str, suggestion_id: str, body: DecisionRequest
         storage.clear_refined(session_id)
         storage.touch_session(session_id)
 
-        return {"decision": decision, "summary": summarise(analysis, decisions["items"])}
+        return {
+            "decision": decision,
+            # Other cards whose decision changed because of this one.
+            "changed": {cid: decisions["items"][cid] for cid in cleared},
+            "summary": summarise(analysis, decisions["items"]),
+        }
 
 
 @app.post("/api/resume/{session_id}/answers")

@@ -267,3 +267,23 @@ def test_seniority_word_from_elsewhere_in_resume_is_still_dropped():
     answers = [{"question_id": "q1", "question": "Tableau?", "details": "I also used Tableau for it"}]
     kept, dropped, _ = check_placements(result, sent, answers, [], set())
     assert not kept and "'led'" in dropped[0]["why"]
+
+
+def test_edit_combines_and_replaces_the_other_change_for_the_line(sid, ai):
+    # The refusal message says "use Edit here to combine both". That must work.
+    ai.placements = {"placements": [placement(
+        "q1", "p10", P10, "Built a Power BI dashboard, later rebuilt in Tableau, used by regional managers to track weekly sales.")],
+        "not_placed": []}
+    card = _answer(sid, [{"question_id": "q1", "has_it": True,
+                          "details": "later rebuilt the sales dashboard in Tableau"}]).json()["added"][0]
+    assert _decide(sid, "s1", "accept").status_code == 200
+    combined = "Built a Power BI dashboard, later rebuilt in Tableau, that regional managers used to track weekly sales."
+    response = _decide(sid, card, "edit", text=combined)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["changed"]["s1"]["effect"] == "keep"
+    items = storage.load_json(sid, "decisions.json")["items"]
+    assert items["s1"]["effect"] == "keep" and items[card]["final_text"] == combined
+    # Exactly one change for the line, so creating the file works.
+    applied = client.post(f"/api/resume/{sid}/apply").json()
+    assert applied["download_ready"] and len(applied["applied"]) == 1

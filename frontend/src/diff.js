@@ -26,8 +26,11 @@ export function movedToFront(before, after) {
 }
 
 export function diffWords(before, after) {
-  const a = before.split(/(\s+)/).filter(Boolean); // keep spaces as tokens
-  const b = after.split(/(\s+)/).filter(Boolean);
+  // Words, spaces and punctuation are separate tokens, so adding a comma
+  // after "(Advanced)" highlights just the comma, not the whole word.
+  const tokens = (text) => text.split(/(\s+|[.,;:!?()[\]{}"'|])/).filter(Boolean);
+  const a = tokens(before);
+  const b = tokens(after);
 
   // lcs[i][j] = length of the LCS of a[i:] and b[j:]
   const lcs = Array.from({ length: a.length + 1 }, () =>
