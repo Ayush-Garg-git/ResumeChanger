@@ -105,7 +105,7 @@ export default function SuggestionCard({ s, decision, onDecide }) {
   const status = statusText(decision);
 
   return (
-    <li className={`suggestion ${decision ? `decided decided-${decision.effect}` : ""}`}>
+    <li id={`card-${s.id}`} className={`suggestion ${decision ? `decided decided-${decision.effect}` : ""}`}>
       <div className="suggestion-head">
         <span className={`kind kind-${s.kind}`}>{KIND_LABELS[s.kind]}</span>
         <code className="pid">{s.paragraph_id}</code>

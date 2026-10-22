@@ -80,10 +80,16 @@ def refined_path(session_id: str) -> Path:
     return _session_dir(session_id) / REFINED_NAME
 
 
+def preview_dir(session_id: str) -> Path:
+    """Preview images and their marked .docx copies live here."""
+    return _session_dir(session_id) / "preview"
+
+
 def clear_refined(session_id: str) -> None:
-    """Forget the edited copy, e.g. when the user changes a decision."""
+    """Forget the edited copy and its preview, e.g. when a decision changes."""
     refined_path(session_id).unlink(missing_ok=True)
     delete_json(session_id, "apply_report.json")
+    shutil.rmtree(preview_dir(session_id), ignore_errors=True)
 
 
 def touch_session(session_id: str) -> None:

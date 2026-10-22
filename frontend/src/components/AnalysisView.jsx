@@ -122,6 +122,7 @@ export default function AnalysisView({ sessionId, fileName, analysis, onStartOve
           fileName={fileName}
           result={applyResult}
           onResult={setApplyResult}
+          onDecide={decide}
         />
       )}
     </section>

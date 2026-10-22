@@ -12,8 +12,8 @@ Tailors an existing DOCX resume to a job description. The AI suggests changes, t
 | 4 | Suggestions with accept / reject / review | Done |
 | 5 | Apply approved changes to a copy of the original DOCX, validate, download | Done |
 | 4b | Answer questions to add confirmed skills | |
-| 6 | Before/after preview and page limits | Next |
-| 7 | Testing, error handling, privacy, deployment | |
+| 6 | Before/after preview and page limits | Done |
+| 7 | Testing, error handling, privacy, deployment | Next |
 
 ## Requirements
 
@@ -52,6 +52,14 @@ pytest
 
 Without a key, the app still runs; the analyse button explains that AI isn't set up.
 Tests never call the real AI: they replace it with a stand-in.
+
+### Preview (Milestone 6)
+
+The before/after preview and page count need LibreOffice and poppler-utils on the server.
+The Docker image installs them. On your own laptop they're optional: without them the
+app still works and says the preview isn't available, and the rendering tests are skipped.
+(Windows: install LibreOffice and poppler, and make sure `soffice`, `pdfinfo` and
+`pdftoppm` are on your PATH, if you want the preview locally.)
 
 ## Run the frontend
 
@@ -120,6 +128,8 @@ backend/
   app/decisions.py     accept / reject / edit rules and the summary of what will change
   app/docx_editor.py   writes approved changes into a copy, run by run, keeping formatting
   app/validator.py     reopens both files and checks only approved text changed
+  app/renderer.py      LibreOffice -> PDF -> page images and page count (one at a time)
+  app/page_fit.py      page-limit check and the options offered to the user
   samples/             fake sample resume and the script that builds it
   tests/               pytest tests
 frontend/
@@ -131,6 +141,7 @@ frontend/
   src/components/AnalysisView.jsx  requirements, suggestions, questions
   src/components/SuggestionCard.jsx  one suggestion with Accept / Edit / Reject
   src/components/DecisionSummary.jsx  counts and the list of what will be applied
+  src/components/PreviewPanel.jsx  before/after pages, page limit and options
   src/diff.js                    word-level highlighting of changes
   vite.config.js                 dev server and /api proxy
 ```

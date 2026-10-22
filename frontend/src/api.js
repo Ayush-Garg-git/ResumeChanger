@@ -96,6 +96,14 @@ export async function downloadRefined(sessionId, originalName) {
   URL.revokeObjectURL(link.href);
 }
 
+export function loadPreview(sessionId) {
+  return request(`/api/resume/${sessionId}/preview`);
+}
+
+export function checkPageFit(sessionId, maxPages) {
+  return request(`/api/resume/${sessionId}/page-fit?max_pages=${maxPages}`);
+}
+
 export function deleteResume(sessionId) {
   return request(`/api/resume/${sessionId}`, { method: "DELETE" });
 }

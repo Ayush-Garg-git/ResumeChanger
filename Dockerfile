@@ -18,13 +18,35 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---------- Stage 2: run the backend ----------
-FROM python:3.12-slim
+# Pinned to a named Debian release (trixie) so the system packages below
+# can't change under us when the default base image moves on.
+FROM python:3.12-slim-trixie
 WORKDIR /app
 
 # Don't write .pyc files; send logs straight to the console.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     STATIC_DIR=/app/static
+
+# For the before/after preview and page count (Milestone 6):
+# - libreoffice-writer-nogui: lays out DOCX pages and converts them to PDF,
+#   without any of the desktop/window parts
+# - poppler-utils: pdfinfo (page count) and pdftoppm (page images)
+# - fonts with the same letter widths as common Word fonts, so page counts
+#   come out close to Word's:
+#     Carlito = Calibri, Caladea = Cambria,
+#     Liberation = Arial, Times New Roman, Courier New
+# This adds a few hundred MB to the image. It's installed before the app
+# code is copied, so Docker can reuse this layer when only code changes.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libreoffice-writer-nogui \
+        poppler-utils \
+        fonts-crosextra-carlito \
+        fonts-crosextra-caladea \
+        fonts-liberation \
+        fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt

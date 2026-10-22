@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { applyDecisions, downloadRefined } from "../api.js";
+import PreviewPanel from "./PreviewPanel.jsx";
 
 // Sticky bar at the bottom of the suggestions: what will happen, at a glance,
 // and the button that writes the approved changes into a copy of the file.
 
-function ApplyResult({ result, sessionId, fileName }) {
+function ApplyResult({ result, sessionId, fileName, onDecide }) {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
 
@@ -66,15 +67,12 @@ function ApplyResult({ result, sessionId, fileName }) {
           {error}
         </p>
       )}
-      <p className="muted small">
-        Open it in Word to check the layout. A side-by-side preview and page-count
-        check come next (Milestone 6).
-      </p>
+      {ready && <PreviewPanel sessionId={sessionId} onDecide={onDecide} />}
     </div>
   );
 }
 
-export default function DecisionSummary({ total, summary, sessionId, fileName, result, onResult }) {
+export default function DecisionSummary({ total, summary, sessionId, fileName, result, onResult, onDecide }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -94,6 +92,7 @@ export default function DecisionSummary({ total, summary, sessionId, fileName, r
   }
 
   return (
+    <>
     <div className="decision-summary">
       <div className="summary-counts">
         <span><strong>{counts.change}</strong> to change</span>
@@ -139,7 +138,10 @@ export default function DecisionSummary({ total, summary, sessionId, fileName, r
         </p>
       )}
 
-      {result && <ApplyResult result={result} sessionId={sessionId} fileName={fileName} />}
     </div>
+
+    {/* Outside the sticky bar: the result and preview are normal page content. */}
+    {result && <ApplyResult result={result} sessionId={sessionId} fileName={fileName} onDecide={onDecide} />}
+    </>
   );
 }

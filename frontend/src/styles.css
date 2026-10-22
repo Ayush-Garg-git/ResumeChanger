@@ -589,11 +589,12 @@ h3 {
 .decision-summary {
   position: sticky;
   bottom: 0;
-  margin: 20px -20px -20px;
+  z-index: 1;
+  margin: 20px -20px 0;
   padding: 14px 20px;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  border-radius: 0 0 12px 12px;
+  border-radius: 0;
   box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.05);
 }
 
@@ -638,8 +639,14 @@ h3 {
   margin-top: 10px;
 }
 
+/* When nothing follows the bar, it closes the card's rounded corners. */
+.decision-summary:last-child {
+  margin-bottom: -20px;
+  border-radius: 0 0 12px 12px;
+}
+
 .apply-result {
-  margin-top: 10px;
+  margin-top: 16px;
 }
 
 .checks {
@@ -664,4 +671,114 @@ h3 {
 
 .check-fail span[aria-hidden] {
   font-weight: 700;
+}
+
+/* ---- Milestone 6: preview and page limit ---- */
+.preview {
+  margin-top: 16px;
+}
+
+.preview-loading {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.legend-note {
+  margin-left: 8px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+  margin-left: 6px;
+}
+
+.swatch-yellow {
+  background: #ffff00;
+  border: 1px solid #d6d600;
+}
+
+.swatch-red {
+  background: #ff0000;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+@media (max-width: 640px) {
+  .preview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.preview-col {
+  min-width: 0;
+}
+
+.preview-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.preview-page {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  background: #fff;
+}
+
+.page-limit {
+  margin: 10px 0;
+}
+
+.limit-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.limit-label select {
+  margin-left: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 400;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.fit-box p {
+  margin: 0 0 6px;
+}
+
+.fit-options {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+}
+
+.fit-options li {
+  padding: 10px 0;
+  border-top: 1px solid rgba(138, 90, 0, 0.2);
+}
+
+.fit-options .btn {
+  margin-top: 4px;
 }

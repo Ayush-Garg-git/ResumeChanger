@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from docx import Document
+from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
@@ -140,7 +141,7 @@ def _char_ops(old: str, new: str) -> list[tuple[int, int, str]]:
     return ops
 
 
-def _rewrite_runs(runs: list[Run], old: str, new: str) -> None:
+def _rewrite_runs(runs: list[Run], old: str, new: str, highlight: bool = False) -> None:
     texts = [r.text for r in runs]
     if not runs:
         raise EditRefused("This line has no editable text.")
@@ -209,6 +210,9 @@ def _rewrite_runs(runs: list[Run], old: str, new: str) -> None:
     for i in sorted(touched):
         if runs[i].text != texts[i]:
             runs[i].text = texts[i]  # \t becomes a tab, \n a line break
+        if highlight and texts[i].strip():
+            # Only for the preview copy, never the file the user downloads.
+            runs[i].font.highlight_color = WD_COLOR_INDEX.YELLOW
 
 
 # --------------------------------------------------------------------------
@@ -241,8 +245,15 @@ def _remove_paragraph(paragraph: Paragraph) -> str:
 # --------------------------------------------------------------------------
 # Main entry point
 # --------------------------------------------------------------------------
-def apply_changes(original: Path, output: Path, changes: list[Change]) -> ApplyResult:
-    """Write `output` = `original` with the given changes. `original` is untouched."""
+def apply_changes(
+    original: Path, output: Path, changes: list[Change], highlight: bool = False
+) -> ApplyResult:
+    """
+    Write `output` = `original` with the given changes. `original` is untouched.
+
+    highlight=True marks the changed words in yellow. That is only used for
+    the "After" preview image, never for the downloadable file.
+    """
     doc = Document(str(original))
     result = ApplyResult()
 
@@ -265,7 +276,7 @@ def apply_changes(original: Path, output: Path, changes: list[Change]) -> ApplyR
 
             if change.effect == "change":
                 runs = _check_paragraph_is_editable(paragraph)
-                _rewrite_runs(runs, change.original_text, change.final_text or "")
+                _rewrite_runs(runs, change.original_text, change.final_text or "", highlight)
                 record["how"] = "changed"
             elif change.effect == "remove":
                 record["how"] = _remove_paragraph(paragraph)
@@ -277,3 +288,21 @@ def apply_changes(original: Path, output: Path, changes: list[Change]) -> ApplyR
 
     doc.save(str(output))
     return result
+
+
+def mark_original(original: Path, output: Path, applied: list[dict]) -> None:
+    """
+    A copy of the original for the "Before" preview: lines that change are
+    highlighted yellow, lines that will be removed red. Text is not changed.
+    """
+    doc = Document(str(original))
+    by_id = {pid: para for pid, para, _ in iter_paragraphs(doc)}
+    for record in applied:
+        paragraph = by_id.get(record["paragraph_id"])
+        if paragraph is None:
+            continue
+        colour = WD_COLOR_INDEX.YELLOW if record["how"] == "changed" else WD_COLOR_INDEX.RED
+        for run in _text_runs(paragraph):
+            if run.text:  # spaces too, so the line reads as one solid mark
+                run.font.highlight_color = colour
+    doc.save(str(output))

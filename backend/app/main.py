@@ -9,22 +9,25 @@ variable called `app`.
 """
 
 import logging
+import re
+import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import storage
+from app import renderer, storage
 from app.analyzer import AIError, analyse, paragraphs_to_send
 from app.config import settings
-from app.docx_reader import read_resume
 from app.decisions import DecisionError, make_decision, summarise
-from app.docx_editor import Change, apply_changes
-from app.validator import validate
+from app.docx_editor import Change, apply_changes, mark_original
+from app.docx_reader import read_resume
+from app.page_fit import page_fit
 from app.schemas import AnalyzeRequest, DecisionRequest
 from app.suggestion_checks import check_suggestions, clean_evidence
 from app.validation import UploadError, validate_docx_upload
+from app.validator import validate
 
 # Privacy rule for logs: record what happened (IDs, counts, error types),
 # never resume text or file names. File names often contain a person's name.
@@ -59,6 +62,7 @@ def health() -> dict:
             "model": settings.gemini_model,
             "tier": settings.gemini_tier,
         },
+        "preview_available": renderer.is_available(),
     }
 
 
@@ -232,6 +236,21 @@ def get_decisions(session_id: str) -> dict:
     return {"decisions": decisions, "summary": summarise(analysis, decisions)}
 
 
+def _planned_changes(session_id: str, analysis: dict) -> list[Change]:
+    """The approved changes, in resume order, ready for the editor."""
+    decisions = storage.load_json(session_id, "decisions.json") or {}
+    return [
+        Change(
+            suggestion_id=c["suggestion_id"],
+            paragraph_id=c["paragraph_id"],
+            effect=c["effect"],
+            original_text=c["original_text"],
+            final_text=c["final_text"],
+        )
+        for c in summarise(analysis, decisions)["changes"]
+    ]
+
+
 @app.post("/api/resume/{session_id}/apply")
 def apply_decisions(session_id: str) -> dict:
     """
@@ -241,24 +260,12 @@ def apply_decisions(session_id: str) -> dict:
     applied; rejected and undecided suggestions never reach the document.
     """
     analysis = _load_analysis(session_id)
-    decisions = storage.load_json(session_id, "decisions.json") or {}
-    planned = summarise(analysis, decisions)["changes"]
-    if not planned:
+    changes = _planned_changes(session_id, analysis)
+    if not changes:
         raise HTTPException(
             status_code=400,
             detail="There is nothing to apply. Accept, edit or remove at least one suggestion first.",
         )
-
-    changes = [
-        Change(
-            suggestion_id=c["suggestion_id"],
-            paragraph_id=c["paragraph_id"],
-            effect=c["effect"],
-            original_text=c["original_text"],
-            final_text=c["final_text"],
-        )
-        for c in planned
-    ]
 
     original = storage.original_path(session_id)
     refined = storage.refined_path(session_id)
@@ -309,6 +316,91 @@ def download_refined(session_id: str) -> FileResponse:
         filename="resume-refined.docx",
         headers={"Cache-Control": "no-store"},
     )
+
+
+def _ready_report(session_id: str) -> dict:
+    """The apply report, only if a validated refined file exists."""
+    _load_analysis(session_id)  # session and analysis checks
+    report = storage.load_json(session_id, "apply_report.json")
+    if not report or not report.get("download_ready") or not storage.refined_path(session_id).is_file():
+        raise HTTPException(status_code=404, detail="Please create the refined resume first.")
+    return report
+
+
+@app.get("/api/resume/{session_id}/preview")
+def preview(session_id: str) -> dict:
+    """
+    Page images of the original and the refined resume, with page counts.
+
+    The images are made from marked copies: in "before", lines that change
+    are yellow and removed lines red; in "after", changed words are yellow.
+    Slow on a small server (it lays out two documents), so results are
+    kept until a decision changes.
+    """
+    report = _ready_report(session_id)
+    folder = storage.preview_dir(session_id)
+    cached = folder / "preview.json"
+    if cached.is_file():
+        return storage.load_json(session_id, "preview/preview.json")
+
+    if not renderer.is_available():
+        return {"available": False, "message": "Preview isn't available on this server."}
+
+    analysis = _load_analysis(session_id)
+    original = storage.original_path(session_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    marked_before = folder / "marked-before.docx"
+    marked_after = folder / "marked-after.docx"
+    try:
+        mark_original(original, marked_before, report["applied"])
+        apply_changes(original, marked_after, _planned_changes(session_id, analysis), highlight=True)
+        before = renderer.render(marked_before, folder, "before")
+        after = renderer.render(marked_after, folder, "after")
+    except renderer.RenderError as err:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(status_code=503, detail=str(err))
+    finally:
+        # The marked .docx copies were only needed to draw the images.
+        marked_before.unlink(missing_ok=True)
+        marked_after.unlink(missing_ok=True)
+
+    base = f"/api/resume/{session_id}/preview"
+    result = {
+        "available": True,
+        "before": {"pages": before.pages, "images": [f"{base}/{p.name}" for p in before.images]},
+        "after": {"pages": after.pages, "images": [f"{base}/{p.name}" for p in after.images]},
+        "max_preview_pages": renderer.MAX_PREVIEW_PAGES,
+    }
+    storage.save_json(session_id, "preview/preview.json", result)
+    logger.info("Session %s preview: %d -> %d pages", session_id, before.pages, after.pages)
+    return result
+
+
+_PREVIEW_IMAGE = re.compile(r"^(before|after)-\d{1,2}\.png$")
+
+
+@app.get("/api/resume/{session_id}/preview/{name}")
+def preview_image(session_id: str, name: str) -> FileResponse:
+    if not storage.is_valid_session_id(session_id) or not _PREVIEW_IMAGE.match(name):
+        raise HTTPException(status_code=400, detail="Invalid preview request.")
+    path = storage.preview_dir(session_id) / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="This preview has expired. Please create it again.")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/resume/{session_id}/page-fit")
+def check_page_fit(session_id: str, max_pages: int) -> dict:
+    """Does the refined resume fit `max_pages`? If not, options to choose from."""
+    if not 1 <= max_pages <= 10:
+        raise HTTPException(status_code=400, detail="Choose between 1 and 10 pages.")
+    _ready_report(session_id)
+    shown = storage.load_json(session_id, "preview/preview.json")
+    if not shown or not shown.get("available"):
+        raise HTTPException(status_code=404, detail="Please load the preview first.")
+    analysis = _load_analysis(session_id)
+    decisions = storage.load_json(session_id, "decisions.json") or {}
+    return page_fit(analysis, decisions, shown["after"]["pages"], max_pages)
 
 
 @app.delete("/api/resume/{session_id}", status_code=204)
