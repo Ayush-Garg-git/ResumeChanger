@@ -19,7 +19,7 @@ Decisions are saved in the session folder as decisions.json:
 
 import re
 
-REWRITE_KINDS = {"shorten", "reword", "emphasise"}
+REWRITE_KINDS = {"shorten", "reword", "emphasise", "add_confirmed"}
 
 # Longest edit we accept, in characters. A resume paragraph is short.
 MAX_EDIT_CHARS = 1000

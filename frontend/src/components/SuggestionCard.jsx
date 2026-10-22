@@ -7,6 +7,7 @@ const KIND_LABELS = {
   emphasise: "Emphasise",
   consider_removing: "Consider removing",
   review: "Review",
+  add_confirmed: "From your answer",
 };
 
 // Button labels depend on the kind, so each button says exactly what happens.
@@ -124,6 +125,12 @@ export default function SuggestionCard({ s, decision, onDecide, locked = false }
         </>
       ) : (
         <Proposal s={s} />
+      )}
+
+      {s.from_answer && (
+        <p className="from-answer">
+          <strong>You said: </strong>"{s.from_answer}"
+        </p>
       )}
 
       <p className="reason">

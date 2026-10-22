@@ -75,6 +75,15 @@ export function decideSuggestion(sessionId, analysisId, suggestionId, action, te
   });
 }
 
+// answers: [{ question_id, has_it, details }]. Only Yes answers are used.
+export function submitAnswers(sessionId, analysisId, answers, consent) {
+  return request(`/api/resume/${sessionId}/answers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ analysis_id: analysisId, answers, consent }),
+  });
+}
+
 export function applyDecisions(sessionId) {
   return request(`/api/resume/${sessionId}/apply`, { method: "POST" });
 }

@@ -86,6 +86,21 @@ class DecisionRequest(BaseModel):
     text: Optional[str] = Field(default=None, max_length=5000)
 
 
+class Answer(BaseModel):
+    question_id: str = Field(max_length=10)
+    # True = "Yes, I have this". Only Yes answers with details are used.
+    has_it: bool
+    # The user's own words: where and how they used it.
+    details: str = Field(default="", max_length=2000)
+
+
+class AnswersRequest(BaseModel):
+    analysis_id: str = Field(max_length=64)
+    answers: list[Answer] = Field(max_length=20)
+    # Sending answers means sending the resume to the AI again.
+    consent: bool = False
+
+
 class AnalyzeRequest(BaseModel):
     job_description: str = Field(max_length=50_000)
     # The user ticked "I understand my resume will be sent to Google Gemini".

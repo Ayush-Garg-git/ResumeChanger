@@ -11,7 +11,7 @@ Tailors an existing DOCX resume to a job description. The AI suggests changes, t
 | 3 | Job description input and AI analysis | Done |
 | 4 | Suggestions with accept / reject / review | Done |
 | 5 | Apply approved changes to a copy of the original DOCX, validate, download | Done |
-| 4b | Answer questions to add confirmed skills | Possible next step |
+| 4b | Answer questions to add confirmed skills | Done |
 | 6 | Before/after preview and page limits | Done |
 | 7 | Testing, error handling, privacy, deployment | Done |
 
@@ -101,6 +101,8 @@ The AI is *told* the rules (`analyzer.py`), but the code also *checks* them, bec
 | Resume already fits: recommend nothing | `no_changes_needed` shown as "No changes are recommended" | `test_analyze.py` |
 | Explain each change | Every suggestion carries a reason; dropped ones show why | `test_analyze.py` |
 | Ask instead of guessing | Missing requirements become questions, never additions | `test_analyze.py` |
+| Only add what the user confirms | Answer cards may only add words from the user's own answer (or already in the resume); no new numbers or seniority words; No answers are never sent | `test_answers.py` |
+| One change per line | Accepting a second change for a line that already has one is refused; the user undoes one or edits to combine | `test_answers.py` |
 | Relevance is a recommendation | "Consider removing" wording; the user can always keep | UI |
 | Keep the original; validate the result | Original never written; validator must pass before download | `test_docx_editor.py`, `test_decisions.py` |
 
@@ -157,6 +159,7 @@ backend/
   app/renderer.py      LibreOffice -> PDF -> page images and page count (one at a time)
   app/page_fit.py      page-limit check and the options offered to the user
   app/limits.py        request size limit and rate limits
+  app/answers.py       turns confirmed answers into suggestions, with answer-only checks
   samples/             fake sample resume and the script that builds it
   tests/               pytest tests
 frontend/
@@ -169,6 +172,7 @@ frontend/
   src/components/SuggestionCard.jsx  one suggestion with Accept / Edit / Reject
   src/components/DecisionSummary.jsx  counts and the list of what will be applied
   src/components/PreviewPanel.jsx  before/after pages, page limit and options
+  src/components/QuestionsPanel.jsx  answer the AI's questions in your own words
   src/diff.js                    word-level highlighting of changes
   vite.config.js                 dev server and /api proxy
 ```

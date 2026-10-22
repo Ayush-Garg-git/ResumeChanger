@@ -22,7 +22,7 @@ import json
 import logging
 import re
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.config import settings
 from app.docx_reader import TOP_SECTION, ResumeOutline, ResumeParagraph
@@ -195,18 +195,19 @@ def _friendly_error(err: Exception) -> AIError:
     return AIError("The AI service had a problem. Please try again shortly.", status_code=502)
 
 
-def analyse(outline: ResumeOutline, job_description: str) -> ResumeAnalysis:
+def ask_model(prompt: str, answer_shape: type[BaseModel]):
+    """
+    Send a prompt, force the answer into `answer_shape` (a Pydantic model),
+    and return it validated. Shared by the analysis and the answers step.
+    """
     if not settings.gemini_api_key:
         raise AIError(
             "AI analysis isn't set up on this server yet (GEMINI_API_KEY is missing).",
             status_code=503,
         )
 
-    prompt = build_prompt(outline, job_description)
-    schema = ResumeAnalysis.model_json_schema()
-
     try:
-        raw = call_model(prompt, schema)
+        raw = call_model(prompt, answer_shape.model_json_schema())
     except AIError:
         raise
     except Exception as err:
@@ -217,7 +218,11 @@ def analyse(outline: ResumeOutline, job_description: str) -> ResumeAnalysis:
         raise _friendly_error(err)
 
     try:
-        return ResumeAnalysis.model_validate(json.loads(raw))
+        return answer_shape.model_validate(json.loads(raw))
     except (json.JSONDecodeError, ValidationError) as err:
         logger.warning("AI returned unreadable output: %s", type(err).__name__)
         raise AIError("The AI returned an answer we couldn't read. Please try again.")
+
+
+def analyse(outline: ResumeOutline, job_description: str) -> ResumeAnalysis:
+    return ask_model(build_prompt(outline, job_description), ResumeAnalysis)

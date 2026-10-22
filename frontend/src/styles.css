@@ -800,3 +800,46 @@ h3 {
   color: var(--muted);
   line-height: 1.5;
 }
+
+/* ---- Milestone 4b: answering questions ---- */
+.questions-panel .questions li {
+  padding: 12px 14px;
+}
+
+.question-text {
+  margin: 0 0 8px;
+}
+
+.yes-no {
+  display: flex;
+  gap: 18px;
+  font-size: 14px;
+}
+
+.yes-no label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.answer-input {
+  margin-top: 8px;
+}
+
+.kind-add_confirmed {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.from-answer {
+  margin: 10px 0 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--ok);
+  background: var(--bg);
+  font-size: 14px;
+}
+
+.answers-result {
+  margin-top: 12px;
+}

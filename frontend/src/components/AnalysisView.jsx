@@ -2,6 +2,7 @@ import { useState } from "react";
 import { decideSuggestion } from "../api.js";
 import SuggestionCard from "./SuggestionCard.jsx";
 import DecisionSummary from "./DecisionSummary.jsx";
+import QuestionsPanel from "./QuestionsPanel.jsx";
 
 const COVERAGE_LABELS = {
   clear: "Shown",
@@ -9,7 +10,7 @@ const COVERAGE_LABELS = {
   missing: "Not shown",
 };
 
-export default function AnalysisView({ sessionId, fileName, analysis, onStartOver }) {
+export default function AnalysisView({ sessionId, fileName, analysis, ai, onAnalysisChange, onStartOver }) {
   const { suggestions, requirements, dropped, questions_for_user: questions } = analysis;
 
   // Decisions as saved by the server: { s1: {action, effect, final_text}, ... }
@@ -35,6 +36,22 @@ export default function AnalysisView({ sessionId, fileName, analysis, onStartOve
     });
     setSummary(result.summary);
     setApplyResult(null);
+  }
+
+  // New suggestions from the user's answers (Milestone 4b). Answering again
+  // replaces the earlier answer cards; decisions on removed cards go too.
+  function handleAnswered(result) {
+    const stillThere = new Set(result.suggestions.map((s) => s.id));
+    const lostDecision = Object.keys(decisions).some((id) => !stillThere.has(id));
+    setDecisions((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => stillThere.has(id))));
+    setSummary(result.summary);
+    if (lostDecision) setApplyResult(null);
+    onAnalysisChange({ ...analysis, suggestions: result.suggestions });
+    if (result.added.length > 0) {
+      setTimeout(() => {
+        document.getElementById(`card-${result.added[0]}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 50);
+    }
   }
 
   return (
@@ -100,20 +117,12 @@ export default function AnalysisView({ sessionId, fileName, analysis, onStartOve
         </>
       )}
 
-      {questions.length > 0 && (
-        <div className="block">
-          <h3 className="block-title">Questions for you</h3>
-          <p className="muted small">
-            The job asks for these, but your resume doesn't show them. We won't add
-            anything you haven't confirmed.
-          </p>
-          <ul className="questions">
-            {questions.map((q) => (
-              <li key={q}>{q}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <QuestionsPanel
+        sessionId={sessionId}
+        analysis={analysis}
+        ai={ai}
+        onAnswered={handleAnswered}
+      />
 
       {dropped.length > 0 && (
         <details className="block">

@@ -39,13 +39,14 @@ from starlette.background import BackgroundTask
 
 from app import renderer, storage
 from app.analyzer import AIError, analyse, paragraphs_to_send, person_name_words
+from app.answers import ADD_KIND, MAX_ANSWER_CHARS, place_answers
 from app.config import settings
 from app.decisions import DecisionError, make_decision, summarise
 from app.docx_editor import Change, apply_changes, mark_original, neutralise_external_links
 from app.docx_reader import read_resume
 from app.limits import BodySizeLimitMiddleware, check_analysis_allowed, check_upload_allowed
 from app.page_fit import page_fit
-from app.schemas import AnalyzeRequest, DecisionRequest
+from app.schemas import AnalyzeRequest, AnswersRequest, DecisionRequest
 from app.suggestion_checks import check_suggestions, clean_evidence
 from app.validation import UploadError, validate_docx_upload
 from app.validator import validate
@@ -318,6 +319,8 @@ def analyze_resume(request: Request, session_id: str, body: AnalyzeRequest) -> d
         "suggestions": [{"id": f"s{i + 1}", **s.model_dump()} for i, s in enumerate(suggestions)],
         "dropped": [d.__dict__ for d in dropped],
         "questions_for_user": analysis.questions_for_user,
+        # IDs so the user can answer each question (Milestone 4b).
+        "questions": [{"id": f"q{i + 1}", "text": q} for i, q in enumerate(analysis.questions_for_user)],
         "no_changes_needed": analysis.no_changes_needed and not suggestions,
         "model": settings.gemini_model,
     }
@@ -358,6 +361,22 @@ def decide_suggestion(session_id: str, suggestion_id: str, body: DecisionRequest
             raise HTTPException(status_code=400, detail=err.message)
 
         decisions = _load_decisions(session_id, analysis)
+
+        # Two changes to the same line can't both be applied: the second
+        # would no longer match the line's text. Ask the user to choose.
+        if decision is not None and decision["effect"] in ("change", "remove"):
+            for other_id, other in decisions["items"].items():
+                if (
+                    other_id != suggestion_id
+                    and other["paragraph_id"] == suggestion["paragraph_id"]
+                    and other["effect"] in ("change", "remove")
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"You already chose a change for this line ({other_id}). "
+                        "Undo that one first, or use Edit here to combine both in your own words.",
+                    )
+
         if decision is None:
             decisions["items"].pop(suggestion_id, None)
         else:
@@ -369,6 +388,79 @@ def decide_suggestion(session_id: str, suggestion_id: str, body: DecisionRequest
         storage.touch_session(session_id)
 
         return {"decision": decision, "summary": summarise(analysis, decisions["items"])}
+
+
+@app.post("/api/resume/{session_id}/answers")
+def answer_questions(request: Request, session_id: str, body: AnswersRequest) -> dict:
+    """
+    Turn the user's Yes answers into suggestions (Milestone 4b).
+
+    Only Yes answers with the user's own words are sent to the AI. New
+    suggestions are added to the analysis as "add_confirmed" cards, which
+    the user accepts, edits or rejects like any other. Answering again
+    replaces the earlier answer-based cards.
+    """
+    analysis = _load_analysis(session_id)
+    if body.analysis_id != analysis["analysis_id"]:
+        raise HTTPException(status_code=409, detail="These questions were replaced by a newer analysis. Please refresh the page.")
+    if not body.consent:
+        raise HTTPException(status_code=400, detail="Please confirm that your resume and answers may be sent to the AI service.")
+
+    questions = {q["id"]: q["text"] for q in analysis.get("questions", [])}
+    confirmed = []
+    for a in body.answers:
+        details = " ".join(a.details.split())
+        if a.question_id not in questions or not a.has_it:
+            continue  # "No" answers never leave the server
+        if not details:
+            raise HTTPException(status_code=400, detail="For each Yes, please say briefly where or how you used it.")
+        if len(details) > MAX_ANSWER_CHARS:
+            raise HTTPException(status_code=400, detail=f"Please keep each answer under {MAX_ANSWER_CHARS} characters.")
+        confirmed.append({"question_id": a.question_id, "question": questions[a.question_id], "details": details})
+    if not confirmed:
+        raise HTTPException(status_code=400, detail="Answer Yes to at least one question to get suggestions.")
+
+    outline = read_resume(storage.original_path(session_id))
+    check_analysis_allowed(request, session_id)
+    taken = {s["paragraph_id"] for s in analysis["suggestions"] if s["kind"] != ADD_KIND}
+    try:
+        kept, dropped, not_placed = place_answers(outline, analysis["role_title"], confirmed, taken)
+    except AIError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.message)
+
+    with storage.session_lock(session_id):
+        current = _load_analysis(session_id)
+        if current["analysis_id"] != analysis["analysis_id"]:
+            raise HTTPException(status_code=409, detail="These questions were replaced by a newer analysis. Please refresh the page.")
+
+        # Replace earlier answer-based cards, and forget decisions on them.
+        old_ids = {s["id"] for s in current["suggestions"] if s["kind"] == ADD_KIND}
+        base = [s for s in current["suggestions"] if s["kind"] != ADD_KIND]
+        next_number = max([int(s["id"][1:]) for s in current["suggestions"]] or [0]) + 1
+        added = [{"id": f"s{next_number + i}", **k} for i, k in enumerate(kept)]
+        current["suggestions"] = base + added
+        storage.save_json(session_id, "analysis.json", current)
+
+        decisions = _load_decisions(session_id, current)
+        if old_ids & set(decisions["items"]):
+            for sid in old_ids:
+                decisions["items"].pop(sid, None)
+            decisions["version"] += 1
+            storage.save_json(session_id, "decisions.json", decisions)
+            storage.clear_refined(session_id)
+        storage.touch_session(session_id)
+
+        logger.info(
+            "Session %s answers: %d sent, %d placed, %d dropped, %d not placed",
+            session_id, len(confirmed), len(added), len(dropped), len(not_placed),
+        )
+        return {
+            "suggestions": current["suggestions"],
+            "added": [s["id"] for s in added],
+            "dropped": dropped,
+            "not_placed": not_placed,
+            "summary": summarise(current, decisions["items"]),
+        }
 
 
 @app.get("/api/resume/{session_id}/decisions")

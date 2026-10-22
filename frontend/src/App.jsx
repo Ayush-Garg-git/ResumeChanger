@@ -158,6 +158,8 @@ export default function App() {
               sessionId={resume.outline.session_id}
               fileName={resume.fileName}
               analysis={analysis}
+              ai={info?.ai}
+              onAnalysisChange={setAnalysis}
               onStartOver={() => setAnalysis(null)}
             />
           )}
