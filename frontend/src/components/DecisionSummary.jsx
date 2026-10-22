@@ -1,9 +1,97 @@
-// Sticky bar at the bottom of the suggestions: what will happen, at a glance.
-// Only "change" and "remove" decisions will ever be applied (Milestone 5).
+import { useState } from "react";
+import { applyDecisions, downloadRefined } from "../api.js";
 
-export default function DecisionSummary({ total, summary }) {
+// Sticky bar at the bottom of the suggestions: what will happen, at a glance,
+// and the button that writes the approved changes into a copy of the file.
+
+function ApplyResult({ result, sessionId, fileName }) {
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function download() {
+    setDownloading(true);
+    setError("");
+    try {
+      await downloadRefined(sessionId, fileName);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  const { applied, skipped, validation, download_ready: ready } = result;
+
+  return (
+    <div className="apply-result">
+      <p className={`message ${ready ? "message-ok" : "message-error"}`}>
+        {ready
+          ? `Your refined resume is ready: ${applied.length} change${applied.length === 1 ? "" : "s"} applied and checked.`
+          : applied.length === 0
+            ? "None of the approved changes could be applied safely, so no file was created."
+            : "The refined file didn't pass our checks, so it isn't offered for download. Your original is unchanged."}
+      </p>
+
+      <ul className="checks">
+        {validation.checks.map((c) => (
+          <li key={c.name} className={c.passed ? "check-pass" : "check-fail"}>
+            <span aria-hidden="true">{c.passed ? "✓" : "✗"}</span> {c.name}
+            {c.detail && <span className="muted small"> ({c.detail})</span>}
+          </li>
+        ))}
+      </ul>
+
+      {skipped.length > 0 && (
+        <div className="message message-warn">
+          <p>
+            <strong>
+              {skipped.length} change{skipped.length === 1 ? " was" : "s were"} not applied:
+            </strong>
+          </p>
+          {skipped.map((s) => (
+            <p key={s.suggestion_id}>
+              <code className="pid">{s.paragraph_id}</code> {s.why}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {ready && (
+        <button className="button-primary" onClick={download} disabled={downloading}>
+          {downloading ? "Preparing download…" : "Download refined resume (.docx)"}
+        </button>
+      )}
+      {error && (
+        <p className="message message-error" role="alert">
+          {error}
+        </p>
+      )}
+      <p className="muted small">
+        Open it in Word to check the layout. A side-by-side preview and page-count
+        check come next (Milestone 6).
+      </p>
+    </div>
+  );
+}
+
+export default function DecisionSummary({ total, summary, sessionId, fileName, result, onResult }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
   const counts = summary?.counts ?? { change: 0, remove: 0, keep: 0, undecided: total };
   const changes = summary?.changes ?? [];
+
+  async function create() {
+    setBusy(true);
+    setError("");
+    try {
+      onResult(await applyDecisions(sessionId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="decision-summary">
@@ -36,9 +124,22 @@ export default function DecisionSummary({ total, summary }) {
       )}
 
       <p className="muted small">
-        Lines you don't decide on stay exactly as they are. Nothing in your file has
-        changed yet: applying these to your Word document comes next (Milestone 5).
+        Lines you don't decide on stay exactly as they are. Your original file is
+        never changed: we write the approved changes into a copy.
       </p>
+
+      {!result && (
+        <button className="button-primary" onClick={create} disabled={busy || changes.length === 0}>
+          {busy ? "Creating…" : "Create refined resume"}
+        </button>
+      )}
+      {error && (
+        <p className="message message-error" role="alert">
+          {error}
+        </p>
+      )}
+
+      {result && <ApplyResult result={result} sessionId={sessionId} fileName={fileName} />}
     </div>
   );
 }

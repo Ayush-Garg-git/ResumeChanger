@@ -632,3 +632,36 @@ h3 {
 .decision-summary > .muted {
   margin-top: 8px;
 }
+
+/* ---- Milestone 5: apply and download ---- */
+.decision-summary .button-primary {
+  margin-top: 10px;
+}
+
+.apply-result {
+  margin-top: 10px;
+}
+
+.checks {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  font-size: 14px;
+}
+
+.checks li {
+  padding: 3px 0;
+}
+
+.check-pass span[aria-hidden] {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.check-fail {
+  color: var(--err);
+}
+
+.check-fail span[aria-hidden] {
+  font-weight: 700;
+}

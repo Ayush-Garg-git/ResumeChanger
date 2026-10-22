@@ -10,9 +10,9 @@ Tailors an existing DOCX resume to a job description. The AI suggests changes, t
 | 2 | Resume upload, validation, DOCX text extraction | Done |
 | 3 | Job description input and AI analysis | Done |
 | 4 | Suggestions with accept / reject / review | Done |
-| 4b | Answer questions to add confirmed skills | Next |
-| 5 | Apply approved changes to the original DOCX | |
-| 6 | Before/after preview, page limits, validation | |
+| 5 | Apply approved changes to a copy of the original DOCX, validate, download | Done |
+| 4b | Answer questions to add confirmed skills | |
+| 6 | Before/after preview and page limits | Next |
 | 7 | Testing, error handling, privacy, deployment | |
 
 ## Requirements
@@ -76,6 +76,7 @@ To rebuild the sample after editing its script: `python -m samples.make_sample_r
 - Logs record session IDs and counts only: no file names, no resume text.
 - AI analysis (Milestone 3) runs only after the user ticks a consent box that names the provider and tier.
 - The Header block (name, contact details) is never sent to the AI. Emails, phone numbers and links elsewhere are masked.
+- Approved changes are written into `refined.docx`, a copy. The validator must pass before the file can be downloaded; changing any decision withdraws it.
 - AI suggestions pass through `suggestion_checks.py`, which drops any that point at unknown paragraphs, misquote the original, add numbers, or add tool/skill names the resume doesn't mention.
 
 ## How the pieces connect
@@ -117,6 +118,8 @@ backend/
   app/analyzer.py      prompt, privacy masking, the Gemini call (only file that knows the provider)
   app/suggestion_checks.py  safety net that drops invented or unsafe suggestions
   app/decisions.py     accept / reject / edit rules and the summary of what will change
+  app/docx_editor.py   writes approved changes into a copy, run by run, keeping formatting
+  app/validator.py     reopens both files and checks only approved text changed
   samples/             fake sample resume and the script that builds it
   tests/               pytest tests
 frontend/

@@ -62,6 +62,40 @@ export function decideSuggestion(sessionId, suggestionId, action, text = null) {
   });
 }
 
+export function applyDecisions(sessionId) {
+  return request(`/api/resume/${sessionId}/apply`, { method: "POST" });
+}
+
+// Downloads the refined file and saves it under the user's own file name,
+// e.g. "My Resume.docx" -> "My Resume (refined).docx". The server never
+// needs to know the original name.
+export async function downloadRefined(sessionId, originalName) {
+  let response;
+  try {
+    response = await fetch(`/api/resume/${sessionId}/download`);
+  } catch {
+    throw new Error("Could not reach the server. Check your connection.");
+  }
+  if (!response.ok) {
+    let detail = "";
+    try {
+      detail = (await response.json()).detail;
+    } catch {
+      // not JSON
+    }
+    throw new Error(detail || `Download failed (${response.status}).`);
+  }
+  const blob = await response.blob();
+  const base = (originalName || "resume.docx").replace(/\.docx$/i, "");
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `${base} (refined).docx`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+}
+
 export function deleteResume(sessionId) {
   return request(`/api/resume/${sessionId}`, { method: "DELETE" });
 }

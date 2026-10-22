@@ -185,3 +185,71 @@ def test_decisions_before_analysis(sample_resume):
 
 def test_unknown_action_is_rejected(session_id):
     assert _decide(session_id, "s1", "approve-everything").status_code == 422
+
+
+# --- Applying and downloading (Milestone 5) ---------------------------------
+
+def _apply(sid):
+    return client.post(f"/api/resume/{sid}/apply")
+
+
+def test_apply_needs_at_least_one_approved_change(session_id):
+    _decide(session_id, "s2", "reject")
+    response = _apply(session_id)
+    assert response.status_code == 400
+    assert "nothing to apply" in response.json()["detail"]
+
+
+def test_apply_and_download_only_approved_changes(session_id):
+    from docx import Document
+    import io
+    _decide(session_id, "s1", "accept")                  # p7 reorder
+    _decide(session_id, "s2", "reject")                  # p10 stays
+    _decide(session_id, "s5", "accept")                  # p14 removed
+    # s3 (p11) left undecided: must stay as it is
+
+    body = _apply(session_id).json()
+    assert body["download_ready"] is True
+    assert body["validation"]["ok"] is True
+    assert {a["paragraph_id"] for a in body["applied"]} == {"p7", "p14"}
+
+    download = client.get(f"/api/resume/{session_id}/download")
+    assert download.status_code == 200
+    texts = [p.text for p in Document(io.BytesIO(download.content)).paragraphs]
+    assert "Tools: Power BI, Excel, Git" in texts
+    assert P10 in texts                                   # rejected: unchanged
+    assert P11 in texts                                   # undecided: unchanged
+    assert P14 not in texts                               # approved removal
+
+
+def test_original_is_untouched_after_apply(session_id):
+    before = storage.original_path(session_id).read_bytes()
+    _decide(session_id, "s1", "accept")
+    _apply(session_id)
+    assert storage.original_path(session_id).read_bytes() == before
+
+
+def test_changing_a_decision_withdraws_the_refined_file(session_id):
+    _decide(session_id, "s1", "accept")
+    _apply(session_id)
+    assert client.get(f"/api/resume/{session_id}/download").status_code == 200
+
+    _decide(session_id, "s2", "accept")
+    assert client.get(f"/api/resume/{session_id}/download").status_code == 404
+
+
+def test_download_before_apply(session_id):
+    response = client.get(f"/api/resume/{session_id}/download")
+    assert response.status_code == 404
+
+
+def test_failed_validation_blocks_download(session_id, monkeypatch):
+    from app import main
+    from app.validator import Check, ValidationReport
+    monkeypatch.setattr(main, "validate", lambda *a, **k: ValidationReport([Check("x", False, "forced")]))
+    _decide(session_id, "s1", "accept")
+
+    body = _apply(session_id).json()
+    assert body["download_ready"] is False
+    assert client.get(f"/api/resume/{session_id}/download").status_code == 404
+    assert not storage.refined_path(session_id).exists()

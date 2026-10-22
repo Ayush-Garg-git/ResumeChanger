@@ -72,6 +72,20 @@ def delete_json(session_id: str, name: str) -> None:
     (_session_dir(session_id) / name).unlink(missing_ok=True)
 
 
+REFINED_NAME = "refined.docx"
+
+
+def refined_path(session_id: str) -> Path:
+    """Where the edited copy goes. It may not exist yet."""
+    return _session_dir(session_id) / REFINED_NAME
+
+
+def clear_refined(session_id: str) -> None:
+    """Forget the edited copy, e.g. when the user changes a decision."""
+    refined_path(session_id).unlink(missing_ok=True)
+    delete_json(session_id, "apply_report.json")
+
+
 def touch_session(session_id: str) -> None:
     """Mark a session as recently used, so it isn't cleaned up mid-work."""
     _session_dir(session_id).touch()

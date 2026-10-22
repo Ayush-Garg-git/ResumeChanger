@@ -9,13 +9,16 @@ const COVERAGE_LABELS = {
   missing: "Not shown",
 };
 
-export default function AnalysisView({ sessionId, analysis, onStartOver }) {
+export default function AnalysisView({ sessionId, fileName, analysis, onStartOver }) {
   const { suggestions, requirements, dropped, questions_for_user: questions } = analysis;
 
   // Decisions as saved by the server: { s1: {action, effect, final_text}, ... }
   // Missing means "not decided", which means the line stays unchanged.
   const [decisions, setDecisions] = useState({});
   const [summary, setSummary] = useState(null);
+  // Result of "Create refined resume". Cleared whenever a decision changes,
+  // because the server withdraws the old file at that point too.
+  const [applyResult, setApplyResult] = useState(null);
 
   async function decide(suggestionId, action, text) {
     // The server checks the decision first; we only update the screen
@@ -28,6 +31,7 @@ export default function AnalysisView({ sessionId, analysis, onStartOver }) {
       return next;
     });
     setSummary(result.summary);
+    setApplyResult(null);
   }
 
   return (
@@ -111,7 +115,14 @@ export default function AnalysisView({ sessionId, analysis, onStartOver }) {
       )}
 
       {suggestions.length > 0 && (
-        <DecisionSummary total={suggestions.length} summary={summary} />
+        <DecisionSummary
+          total={suggestions.length}
+          summary={summary}
+          sessionId={sessionId}
+          fileName={fileName}
+          result={applyResult}
+          onResult={setApplyResult}
+        />
       )}
     </section>
   );
