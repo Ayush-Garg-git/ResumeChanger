@@ -11,9 +11,9 @@ Tailors an existing DOCX resume to a job description. The AI suggests changes, t
 | 3 | Job description input and AI analysis | Done |
 | 4 | Suggestions with accept / reject / review | Done |
 | 5 | Apply approved changes to a copy of the original DOCX, validate, download | Done |
-| 4b | Answer questions to add confirmed skills | |
+| 4b | Answer questions to add confirmed skills | Possible next step |
 | 6 | Before/after preview and page limits | Done |
-| 7 | Testing, error handling, privacy, deployment | Next |
+| 7 | Testing, error handling, privacy, deployment | Done |
 
 ## Requirements
 
@@ -76,16 +76,42 @@ Upload `backend/samples/sample_resume.docx` (a fake resume) to see the outline.
 
 To rebuild the sample after editing its script: `python -m samples.make_sample_resume` (from `backend/`).
 
-## Privacy in this version
+## Privacy and security
 
-- Uploads are checked: `.docx` only, 5 MB max, must be a real Word file, no macros.
-- Each upload is stored in its own temp folder as `original.docx` and is never modified.
-- Files are deleted when the user clicks Remove, or automatically after 60 minutes.
-- Logs record session IDs and counts only: no file names, no resume text.
-- AI analysis (Milestone 3) runs only after the user ticks a consent box that names the provider and tier.
-- The Header block (name, contact details) is never sent to the AI. Emails, phone numbers and links elsewhere are masked.
-- Approved changes are written into `refined.docx`, a copy. The validator must pass before the file can be downloaded; changing any decision withdraws it.
-- AI suggestions pass through `suggestion_checks.py`, which drops any that point at unknown paragraphs, misquote the original, add numbers, or add tool/skill names the resume doesn't mention.
+- **Uploads:** `.docx` only, 5 MB max, must be a real Word file, no macros, at most 5,000 paragraphs and 20 MB unzipped. Any request body over the limit is refused before it's saved.
+- **Storage:** each upload lives in its own temp folder as `original.docx` and is never modified. Everything is deleted when the user clicks Remove, or by a background job 60 minutes after the last action.
+- **AI:** nothing is sent until the user ticks a consent box that names the provider and tier. The top contact block and Personal Details, Declaration, Contact and References sections are never sent. The person's name, emails, phone and other long numbers, links, PAN and passport numbers, and date-of-birth lines are masked elsewhere. Masking is pattern-based and the notice says it can miss unusual formats.
+- **Limits:** per network, per session and per day caps on AI analyses protect the free AI quota.
+- **Logs:** session IDs, counts and error types only. Never file names or resume text. Unexpected errors show a generic message.
+- **Browser:** security headers (content security policy, no framing, no sniffing, no referrer). The `/docs` API page is off in production.
+- **Keys:** only in environment variables (`backend/.env` locally, Render's Environment tab live).
+
+## How the brief's rules are enforced
+
+The AI is *told* the rules (`analyzer.py`), but the code also *checks* them, because being told isn't proof.
+
+| Rule in the brief | Where it's enforced | Tested in |
+|---|---|---|
+| Never invent skills, projects, achievements | `suggestion_checks.py` drops proposals that add numbers, tool-like terms, or job-description words the resume never uses | `test_suggestion_checks.py`, `test_hardening.py` (7) |
+| Don't make content sound more impressive | `suggestion_checks.py` drops proposals that add words like "led", "spearheaded", "owned" | `test_hardening.py` (7) |
+| Smallest useful change | "shorten" must be shorter; "emphasise" must only reorder; edits touch only the changed runs | `test_suggestion_checks.py`, `test_docx_editor.py` |
+| Never remove content without approval | Removal happens only on an explicit "Remove line" click; undecided = unchanged | `test_decisions.py` |
+| Apply only approved changes | Decisions are versioned; files and previews made from older decisions are never served | `test_decisions.py`, `test_hardening.py` (1, 2, 13) |
+| Don't change design or formatting | Run-level editing; validator compares untouched paragraphs byte-for-byte | `test_docx_editor.py` |
+| Resume already fits: recommend nothing | `no_changes_needed` shown as "No changes are recommended" | `test_analyze.py` |
+| Explain each change | Every suggestion carries a reason; dropped ones show why | `test_analyze.py` |
+| Ask instead of guessing | Missing requirements become questions, never additions | `test_analyze.py` |
+| Relevance is a recommendation | "Consider removing" wording; the user can always keep | UI |
+| Keep the original; validate the result | Original never written; validator must pass before download | `test_docx_editor.py`, `test_decisions.py` |
+
+Page counts in the preview are estimates (LibreOffice, not Word), and the app says so.
+
+## Deployment checklist
+
+1. Push to `main`. GitHub runs the tests (see the green tick), and Render builds the Docker image.
+2. In Render > Environment, set `GEMINI_API_KEY`. The other variables have defaults in `render.yaml` and `config.py`.
+3. After deploy, `/api/health` should show the new version, `"configured": true` and `"preview_available": true`.
+4. On a paid AI key, set `GEMINI_TIER=paid` so the privacy notice stays accurate, and consider raising the analysis limits.
 
 ## How the pieces connect
 
@@ -130,6 +156,7 @@ backend/
   app/validator.py     reopens both files and checks only approved text changed
   app/renderer.py      LibreOffice -> PDF -> page images and page count (one at a time)
   app/page_fit.py      page-limit check and the options offered to the user
+  app/limits.py        request size limit and rate limits
   samples/             fake sample resume and the script that builds it
   tests/               pytest tests
 frontend/

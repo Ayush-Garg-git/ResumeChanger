@@ -11,6 +11,7 @@ is safe to show to the user.
 """
 
 import io
+import re
 import zipfile
 
 from app.config import settings
@@ -27,7 +28,14 @@ class UploadError(Exception):
 
 # A DOCX this large once unzipped is not a resume. This blocks "zip bombs":
 # tiny files that expand to gigabytes and crash the server.
-MAX_UNZIPPED_BYTES = 50 * 1024 * 1024
+MAX_UNZIPPED_BYTES = 20 * 1024 * 1024
+
+# The main text part of a real resume is well under 1 MB, with at most a
+# few hundred paragraphs. A tiny file with 100,000 empty paragraphs would
+# keep the server busy for minutes, so we refuse it before reading it.
+MAX_DOCUMENT_XML_BYTES = 5 * 1024 * 1024
+MAX_PARAGRAPHS = 5000
+_PARAGRAPH_TAG = re.compile(rb"<(?:[A-Za-z_][\w.-]*:)?p[\s/>]")
 
 
 def validate_docx_upload(filename: str | None, data: bytes) -> None:
@@ -69,3 +77,13 @@ def validate_docx_upload(filename: str | None, data: bytes) -> None:
         unzipped_size = sum(info.file_size for info in archive.infolist())
         if unzipped_size > MAX_UNZIPPED_BYTES:
             raise UploadError("This document is too large to process.")
+
+        if archive.getinfo("word/document.xml").file_size > MAX_DOCUMENT_XML_BYTES:
+            raise UploadError("This document is too long to be a resume.")
+        body = archive.read("word/document.xml")
+        # Count paragraph tags without parsing the XML: <w:p>, <w:p ...> and
+        # the short empty form <w:p/>, whatever the namespace prefix. (Not
+        # <w:pPr> or <w:pStyle>: the character after "p" must end the name.)
+        paragraphs = len(_PARAGRAPH_TAG.findall(body))
+        if paragraphs > MAX_PARAGRAPHS:
+            raise UploadError("This document is too long to be a resume.")

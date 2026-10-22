@@ -24,6 +24,15 @@ def temp_upload_dir(tmp_path, monkeypatch):
     return folder
 
 
+@pytest.fixture(autouse=True)
+def fresh_rate_limits():
+    """Each test starts with empty rate-limit counters."""
+    from app.limits import limiter
+    limiter.reset()
+    yield
+    limiter.reset()
+
+
 @pytest.fixture
 def sample_resume(tmp_path):
     """A freshly built fake resume (see samples/make_sample_resume.py)."""

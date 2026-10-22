@@ -75,13 +75,18 @@ class ResumeAnalysis(BaseModel):
 # --------------------------------------------------------------------------
 # What the frontend sends
 # --------------------------------------------------------------------------
+# max_length values are hard caps against abuse. The friendlier limits
+# (and their messages) are checked in the routes.
 class DecisionRequest(BaseModel):
     action: Literal["accept", "reject", "edit", "undecided"]
+    # Which analysis these suggestions came from. If the user re-analysed in
+    # another tab, an old page can't change decisions for the new analysis.
+    analysis_id: str = Field(max_length=64)
     # Only for "edit": the user's own version of the line.
-    text: Optional[str] = None
+    text: Optional[str] = Field(default=None, max_length=5000)
 
 
 class AnalyzeRequest(BaseModel):
-    job_description: str
+    job_description: str = Field(max_length=50_000)
     # The user ticked "I understand my resume will be sent to Google Gemini".
     consent: bool = False

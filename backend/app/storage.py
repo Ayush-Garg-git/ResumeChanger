@@ -11,14 +11,23 @@ Each upload gets its own folder, named by a random "session ID":
 next to it, so the original is always there for comparison and recovery.
 
 There is no database. A session is just a folder, and it is deleted when
-the user removes it or when it is older than `session_ttl_minutes`.
+the user removes it or when it has been unused for `session_ttl_minutes`.
+
+Two requests for the same session can arrive at the same moment (FastAPI
+runs them in parallel threads). Anything that reads a session's files,
+changes them and writes them back must hold `session_lock(session_id)`,
+or one request's changes can silently overwrite the other's.
 """
 
 import json
+import os
 import re
 import shutil
+import tempfile
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from app.config import settings
@@ -56,9 +65,45 @@ def original_path(session_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
+# One lock per session. RLock: the same request may take it again inside
+# a helper without blocking itself.
+_locks: dict[str, threading.RLock] = {}
+_locks_guard = threading.Lock()
+
+
+def _lock_for(session_id: str) -> threading.RLock:
+    with _locks_guard:
+        return _locks.setdefault(session_id, threading.RLock())
+
+
+@contextmanager
+def session_lock(session_id: str):
+    """Hold this while reading and then changing a session's files."""
+    lock = _lock_for(session_id)
+    with lock:
+        yield
+
+
+def _forget_lock(session_id: str) -> None:
+    with _locks_guard:
+        _locks.pop(session_id, None)
+
+
 def save_json(session_id: str, name: str, data: dict) -> None:
-    """Save a small JSON file (e.g. the AI analysis) next to the original."""
-    (_session_dir(session_id) / name).write_text(json.dumps(data), encoding="utf-8")
+    """
+    Save a small JSON file next to the original, atomically: write a temp
+    file and swap it in, so a reader never sees a half-written file.
+    """
+    target = _session_dir(session_id) / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, target)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def load_json(session_id: str, name: str) -> dict | None:
@@ -100,18 +145,21 @@ def touch_session(session_id: str) -> None:
 def delete_session(session_id: str) -> bool:
     """Delete a session folder. Returns False if it didn't exist."""
     folder = _session_dir(session_id)
-    if not folder.is_dir():
-        return False
-    shutil.rmtree(folder)
+    with session_lock(session_id):
+        if not folder.is_dir():
+            return False
+        shutil.rmtree(folder)
+    _forget_lock(session_id)
     return True
 
 
 def cleanup_expired_sessions() -> int:
     """
-    Delete every session folder older than the time limit.
+    Delete every session folder unused for longer than the time limit.
 
-    Called on each upload, so old files disappear without needing a
-    separate background job. Returns how many folders were removed.
+    Runs every few minutes in the background (see main.py) and on each
+    upload. Sessions busy with a request are skipped this round.
+    Returns how many folders were removed.
     """
     if not settings.upload_dir.is_dir():
         return 0
@@ -122,7 +170,15 @@ def cleanup_expired_sessions() -> int:
         # Skip anything that isn't one of our session folders.
         if not folder.is_dir() or not is_valid_session_id(folder.name):
             continue
-        if folder.stat().st_mtime < cutoff:
+        if folder.stat().st_mtime >= cutoff:
+            continue
+        lock = _lock_for(folder.name)
+        if not lock.acquire(blocking=False):
+            continue  # in use right now; try again next round
+        try:
             shutil.rmtree(folder, ignore_errors=True)
-            removed += 1
+        finally:
+            lock.release()
+        _forget_lock(folder.name)
+        removed += 1
     return removed

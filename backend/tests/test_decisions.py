@@ -60,9 +60,15 @@ def session_id(sample_resume, monkeypatch):
     return sid
 
 
-def _decide(sid, suggestion_id, action, text=None):
+def _analysis_id(sid):
+    saved = storage.load_json(sid, "analysis.json")
+    return saved["analysis_id"] if saved else "none"
+
+
+def _decide(sid, suggestion_id, action, text=None, analysis_id=None):
     return client.put(f"/api/resume/{sid}/suggestions/{suggestion_id}",
-                      json={"action": action, "text": text})
+                      json={"action": action, "text": text,
+                            "analysis_id": analysis_id or _analysis_id(sid)})
 
 
 # --- Starting state ---------------------------------------------------------
@@ -152,8 +158,10 @@ def test_changes_are_listed_in_resume_order(session_id):
 def test_decisions_are_saved_for_milestone_5(session_id):
     _decide(session_id, "s2", "accept")
     saved = storage.load_json(session_id, "decisions.json")
-    assert saved["s2"]["paragraph_id"] == "p10"
-    assert saved["s2"]["effect"] == "change"
+    assert saved["items"]["s2"]["paragraph_id"] == "p10"
+    assert saved["items"]["s2"]["effect"] == "change"
+    assert saved["analysis_id"] == _analysis_id(session_id)
+    assert saved["version"] == 1
 
 
 def test_new_analysis_resets_decisions(session_id):

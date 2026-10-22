@@ -59,8 +59,11 @@ export default function JobDescriptionStep({ sessionId, ai, onAnalysed }) {
             <p>
               <strong>Before you continue:</strong> the text of your resume and this job
               description will be sent to <strong>{ai.provider}</strong> ({ai.model}) for
-              analysis. Your name and contact block are not sent, and emails, phone
-              numbers and links are masked.
+              analysis. We don't send your name, the contact block at the top, or
+              sections such as Personal Details, Declaration or References, and we mask
+              emails, phone numbers, links and ID numbers we recognise. Automatic masking
+              can miss unusual formats, so only continue if you're comfortable with the
+              rest of your resume being sent.
               {ai.tier === "free" ? (
                 <>
                   {" "}This site uses Google's <strong>free tier</strong>, where Google may

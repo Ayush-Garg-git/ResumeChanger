@@ -782,3 +782,21 @@ h3 {
 .fit-options .btn {
   margin-top: 4px;
 }
+
+/* ---- Milestone 7 ---- */
+.expired-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.footer {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}

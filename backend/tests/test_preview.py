@@ -150,7 +150,8 @@ def applied_session(sample_resume, monkeypatch):
     sid = client.post("/api/resume", files=files).json()["session_id"]
     job = "Data Analyst role: Power BI dashboards, SQL, weekly sales reporting for regional managers."
     client.post(f"/api/resume/{sid}/analyze", json={"job_description": job, "consent": True})
-    client.put(f"/api/resume/{sid}/suggestions/s1", json={"action": "accept"})
+    aid = storage.load_json(sid, "analysis.json")["analysis_id"]
+    client.put(f"/api/resume/{sid}/suggestions/s1", json={"action": "accept", "analysis_id": aid})
     assert client.post(f"/api/resume/{sid}/apply").json()["download_ready"]
     return sid
 
@@ -183,7 +184,8 @@ def test_preview_page_fit_and_cleanup(applied_session):
     assert fit["fits"] is True
 
     # Changing a decision withdraws the preview with the file.
-    client.put(f"/api/resume/{sid}/suggestions/s3", json={"action": "accept"})
+    aid = storage.load_json(sid, "analysis.json")["analysis_id"]
+    client.put(f"/api/resume/{sid}/suggestions/s3", json={"action": "accept", "analysis_id": aid})
     assert not storage.preview_dir(sid).exists()
 
 

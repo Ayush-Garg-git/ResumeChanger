@@ -25,7 +25,7 @@ class Settings:
 
     # Version of the API. Bump it when the API changes in a way the
     # frontend needs to know about.
-    api_version: str = "0.6.0"
+    api_version: str = "0.7.0"
 
     # Where the frontend runs in development. Only used if someone calls the
     # backend directly from the browser instead of through the Vite proxy.
@@ -68,6 +68,22 @@ class Settings:
     # Job description length limits (characters).
     job_description_min_chars: int = 80
     job_description_max_chars: int = 15000
+
+    # --- Protection for a small public server (Milestone 7) ---
+    # Rate limits. The defaults suit a free AI key; raise them for a paid one.
+    uploads_per_ip_per_hour: int = int(os.getenv("UPLOADS_PER_IP_PER_HOUR", "30"))
+    analyses_per_session: int = int(os.getenv("ANALYSES_PER_SESSION", "5"))
+    analyses_per_ip_per_hour: int = int(os.getenv("ANALYSES_PER_IP_PER_HOUR", "10"))
+    analyses_per_day: int = int(os.getenv("ANALYSES_PER_DAY", "200"))
+
+    # How often the background job deletes expired sessions (seconds).
+    cleanup_interval_seconds: int = int(os.getenv("CLEANUP_INTERVAL_SECONDS", "300"))
+
+    # The interactive API pages (/docs). Useful while developing; switched
+    # off by default in production, where STATIC_DIR is set.
+    enable_api_docs: bool = os.getenv(
+        "ENABLE_API_DOCS", "false" if os.getenv("STATIC_DIR") else "true"
+    ).lower() == "true"
 
 
 settings = Settings()

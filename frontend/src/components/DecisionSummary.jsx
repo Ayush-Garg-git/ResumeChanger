@@ -5,7 +5,7 @@ import PreviewPanel from "./PreviewPanel.jsx";
 // Sticky bar at the bottom of the suggestions: what will happen, at a glance,
 // and the button that writes the approved changes into a copy of the file.
 
-function ApplyResult({ result, sessionId, fileName, onDecide }) {
+function ApplyResult({ result, sessionId, fileName, onDecide, onRetry, retrying }) {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
 
@@ -67,14 +67,23 @@ function ApplyResult({ result, sessionId, fileName, onDecide }) {
           {error}
         </p>
       )}
+      {!ready && (
+        <button className="btn" onClick={onRetry} disabled={retrying}>
+          {retrying ? "Trying again…" : "Try again"}
+        </button>
+      )}
+
       {ready && <PreviewPanel sessionId={sessionId} onDecide={onDecide} />}
     </div>
   );
 }
 
-export default function DecisionSummary({ total, summary, sessionId, fileName, result, onResult, onDecide }) {
-  const [busy, setBusy] = useState(false);
+export default function DecisionSummary({
+  total, summary, sessionId, fileName, result, onResult, onDecide, creating, onCreatingChange,
+}) {
   const [error, setError] = useState("");
+  const busy = creating;
+  const setBusy = onCreatingChange;
 
   const counts = summary?.counts ?? { change: 0, remove: 0, keep: 0, undecided: total };
   const changes = summary?.changes ?? [];
@@ -141,7 +150,16 @@ export default function DecisionSummary({ total, summary, sessionId, fileName, r
     </div>
 
     {/* Outside the sticky bar: the result and preview are normal page content. */}
-    {result && <ApplyResult result={result} sessionId={sessionId} fileName={fileName} onDecide={onDecide} />}
+    {result && (
+      <ApplyResult
+        result={result}
+        sessionId={sessionId}
+        fileName={fileName}
+        onDecide={onDecide}
+        onRetry={create}
+        retrying={busy}
+      />
+    )}
     </>
   );
 }

@@ -5,7 +5,7 @@ import { uploadResume } from "../api.js";
 // these browser checks only give faster feedback, they are not security.
 const MAX_MB = 5;
 
-export default function UploadStep({ onUploaded }) {
+export default function UploadStep({ onUploaded, minutes = 60 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
@@ -80,9 +80,9 @@ export default function UploadStep({ onUploaded }) {
       )}
 
       <p className="note">
-        Your file is stored temporarily on our server and deleted automatically
-        after 60 minutes, or right away when you click Remove. This step does
-        not send your resume to any AI service.
+        Your file is stored temporarily on our server and deleted {minutes} minutes
+        after your last action, or right away when you click Remove. This step
+        does not send your resume to any AI service.
       </p>
     </section>
   );

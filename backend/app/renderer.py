@@ -18,7 +18,9 @@ Honest limits
   so only ONE render runs at a time (the lock below). Others wait.
 """
 
+import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -60,7 +62,24 @@ def is_available() -> bool:
 
 
 def _run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    """
+    Run a program in its own process group. On timeout, stop the whole
+    group: `soffice` starts a helper (soffice.bin) that would otherwise
+    keep running, holding ~200 MB and blocking later previews.
+    """
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def _to_pdf(docx: Path, work_dir: Path) -> Path:

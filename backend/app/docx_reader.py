@@ -76,6 +76,12 @@ SECTION_KEYWORDS = {
         "achievements", "awards", "accomplishments", "honours", "honors",
         "awards and achievements",
     ],
+    # Never sent to the AI (see analyzer.NEVER_SEND_SECTIONS).
+    "Personal": [
+        "personal details", "personal information", "personal data",
+        "personal particulars", "declaration", "contact", "contact details",
+        "contact information", "references", "referees",
+    ],
     "Other": [
         "extracurricular", "extracurricular activities", "activities",
         "positions of responsibility", "volunteering", "volunteer experience",

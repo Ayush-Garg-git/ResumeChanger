@@ -50,6 +50,12 @@ from app.docx_reader import iter_paragraphs
 # we leave the run alone.
 _SAFE_RUN_CHILDREN = {qn("w:rPr"), qn("w:t"), qn("w:tab"), qn("w:cr"), qn("w:lastRenderedPageBreak")}
 
+# Elements inside a paragraph that removal would silently destroy.
+_HIDDEN_CONTENT_TAGS = (
+    "w:footnoteReference", "w:endnoteReference", "w:commentRangeStart",
+    "w:commentReference", "w:fldChar", "w:fldSimple", "w:object",
+)
+
 # Words, runs of spaces/tabs, and single punctuation marks.
 _TOKEN = re.compile(r"\w+|\s+|[^\w\s]", re.UNICODE)
 
@@ -226,6 +232,15 @@ def _remove_paragraph(paragraph: Paragraph) -> str:
         raise EditRefused("This line ends a page-layout section in Word, so it can't be removed safely.")
     if p.find(".//" + qn("w:drawing")) is not None or p.find(".//" + qn("w:pict")) is not None:
         raise EditRefused("This line holds an image or icon, so it wasn't removed. You can delete it in Word.")
+    # Things whose loss the text comparison can't see: footnotes, comments,
+    # fields, embedded objects. Refuse rather than drop them silently.
+    for tag in _HIDDEN_CONTENT_TAGS:
+        if p.find(".//" + qn(tag)) is not None:
+            raise EditRefused(
+                "This line holds a footnote, comment or field, so it wasn't removed. You can delete it in Word."
+            )
+    # Same check as for edits: no text we can't see (e.g. tracked changes).
+    _check_paragraph_is_editable(paragraph)
 
     parent = p.getparent()
     # A table cell must always contain at least one paragraph.
@@ -306,3 +321,26 @@ def mark_original(original: Path, output: Path, applied: list[dict]) -> None:
             if run.text:  # spaces too, so the line reads as one solid mark
                 run.font.highlight_color = colour
     doc.save(str(output))
+
+
+# Relationship types that only make a document LOOK somewhere (clickable
+# links). Every other external relationship (linked images, templates,
+# sub-documents) would make LibreOffice fetch a URL or read a file.
+_HYPERLINK_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+
+
+def neutralise_external_links(path: Path) -> None:
+    """
+    For preview copies only: point external links that could be FETCHED
+    (linked images, templates) at nothing, so rendering never reaches out
+    to a URL or a file on the server. Clickable hyperlinks are left alone.
+    """
+    doc = Document(str(path))
+    changed = False
+    for part in doc.part.package.iter_parts():
+        for rel in part.rels.values():
+            if rel.is_external and rel.reltype != _HYPERLINK_TYPE:
+                rel._target = "about:blank"
+                changed = True
+    if changed:
+        doc.save(str(path))

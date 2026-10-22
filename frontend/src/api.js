@@ -2,6 +2,17 @@
 // Components never call fetch() directly. If a URL or error format
 // changes, there is exactly one place to update.
 
+// The backend says this when a session has been deleted or has expired.
+// App.jsx listens for the "session-expired" event and offers a fresh start,
+// so the user is never stuck on a screen whose resume no longer exists.
+const EXPIRED_HINT = "upload it again";
+
+function announceIfExpired(status, detail) {
+  if (status === 404 && detail.toLowerCase().includes(EXPIRED_HINT)) {
+    window.dispatchEvent(new CustomEvent("session-expired"));
+  }
+}
+
 async function request(path, options = {}) {
   let response;
   try {
@@ -21,6 +32,7 @@ async function request(path, options = {}) {
     } catch {
       // The body wasn't JSON (for example, the dev proxy's own error page).
     }
+    announceIfExpired(response.status, detail);
     if (detail) throw new Error(detail);
     if (response.status >= 500) {
       throw new Error("The server is not responding. Please try again shortly.");
@@ -54,11 +66,12 @@ export function analyzeResume(sessionId, jobDescription, consent) {
 }
 
 // action: "accept" | "reject" | "edit" | "undecided". text is only for "edit".
-export function decideSuggestion(sessionId, suggestionId, action, text = null) {
+// analysisId ties the decision to the analysis it was made on.
+export function decideSuggestion(sessionId, analysisId, suggestionId, action, text = null) {
   return request(`/api/resume/${sessionId}/suggestions/${suggestionId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, text }),
+    body: JSON.stringify({ action, text, analysis_id: analysisId }),
   });
 }
 
@@ -83,6 +96,7 @@ export async function downloadRefined(sessionId, originalName) {
     } catch {
       // not JSON
     }
+    announceIfExpired(response.status, detail || "");
     throw new Error(detail || `Download failed (${response.status}).`);
   }
   const blob = await response.blob();

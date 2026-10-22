@@ -191,7 +191,13 @@ export default function PreviewPanel({ sessionId, onDecide }) {
   }, [sessionId]);
 
   if (error) {
-    return <p className="message message-warn">Preview: {error} You can still download the file.</p>;
+    const fileStillThere = !/upload it again|create (it|the refined resume) again|changed/i.test(error);
+    return (
+      <p className="message message-warn">
+        Preview: {error}
+        {fileStillThere && " You can still download the file."}
+      </p>
+    );
   }
   if (!preview) {
     return (

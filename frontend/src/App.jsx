@@ -5,8 +5,14 @@ import ResumeOutline from "./components/ResumeOutline.jsx";
 import JobDescriptionStep from "./components/JobDescriptionStep.jsx";
 import AnalysisView from "./components/AnalysisView.jsx";
 
+// On Render's free plan the server sleeps when idle and takes up to about
+// a minute to wake. We retry the first connection a few times and say what's
+// happening, instead of showing an error straight away.
+const HEALTH_RETRIES = 4;
+const SLOW_START_MS = 4000;
+
 export default function App() {
-  // Backend connection: "checking", "ok" or "error"
+  // Backend connection: "checking", "waking", "ok" or "error"
   const [status, setStatus] = useState("checking");
   const [info, setInfo] = useState(null);
   const [healthError, setHealthError] = useState("");
@@ -15,6 +21,7 @@ export default function App() {
   const [resume, setResume] = useState(null); // { outline, fileName }
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState("");
+  const [expired, setExpired] = useState(false);
 
   // The AI's analysis for the current job description. null until analysed.
   const [analysis, setAnalysis] = useState(null);
@@ -22,17 +29,40 @@ export default function App() {
   async function runCheck() {
     setStatus("checking");
     setHealthError("");
+    const slow = setTimeout(() => setStatus((s) => (s === "checking" ? "waking" : s)), SLOW_START_MS);
     try {
-      setInfo(await checkHealth());
-      setStatus("ok");
+      for (let attempt = 1; ; attempt++) {
+        try {
+          setInfo(await checkHealth());
+          setStatus("ok");
+          return;
+        } catch (err) {
+          if (attempt >= HEALTH_RETRIES) throw err;
+          setStatus("waking");
+          await new Promise((r) => setTimeout(r, 3000 * attempt));
+        }
+      }
     } catch (err) {
       setHealthError(err.message);
       setStatus("error");
+    } finally {
+      clearTimeout(slow);
     }
   }
 
   useEffect(() => {
     runCheck();
+  }, []);
+
+  // Any request that finds the session gone sends this event (see api.js).
+  useEffect(() => {
+    function onExpired() {
+      setResume(null);
+      setAnalysis(null);
+      setExpired(true);
+    }
+    window.addEventListener("session-expired", onExpired);
+    return () => window.removeEventListener("session-expired", onExpired);
   }, []);
 
   async function handleRemove() {
@@ -67,11 +97,10 @@ export default function App() {
 
       <div className={`status status-${status}`} aria-live="polite">
         {status === "checking" && <span>Connecting…</span>}
-        {status === "ok" && (
-          <span>
-            Connected · v{info.version}
-          </span>
+        {status === "waking" && (
+          <span>Waking up the server. On the free plan this can take up to a minute…</span>
         )}
+        {status === "ok" && <span>Connected · v{info.version}</span>}
         {status === "error" && (
           <>
             <span>{healthError}</span>
@@ -80,9 +109,26 @@ export default function App() {
         )}
       </div>
 
+      {expired && !resume && (
+        <div className="message message-warn expired-banner" role="alert">
+          <p>
+            <strong>Your session ended.</strong> For your privacy, uploaded resumes are
+            deleted {info?.session_minutes ?? 60} minutes after your last action. Please
+            upload your resume again to continue.
+          </p>
+          <button className="btn" onClick={() => setExpired(false)}>
+            OK
+          </button>
+        </div>
+      )}
+
       {status === "ok" && !resume && (
         <UploadStep
-          onUploaded={(outline, fileName) => setResume({ outline, fileName })}
+          minutes={info?.session_minutes ?? 60}
+          onUploaded={(outline, fileName) => {
+            setExpired(false);
+            setResume({ outline, fileName });
+          }}
         />
       )}
 
@@ -117,6 +163,16 @@ export default function App() {
           )}
         </>
       )}
+
+      <footer className="footer">
+        <p>
+          <strong>Your privacy.</strong> Your resume is stored on our server only while
+          you work on it, and deleted when you click Remove or{" "}
+          {info?.session_minutes ?? 60} minutes after your last action. Nothing is sent to
+          the AI until you agree. We don't keep copies of your files or job descriptions,
+          and our logs never contain their text.
+        </p>
+      </footer>
     </main>
   );
 }

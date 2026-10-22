@@ -6,23 +6,44 @@ Run it with:
 
 `app.main:app` means: in the package `app`, file `main.py`, use the
 variable called `app`.
+
+How a session's files fit together
+----------------------------------
+    original.docx        the upload, never modified
+    analysis.json        AI suggestions (has a random analysis_id)
+    decisions.json       {"analysis_id", "version", "items": {s1: ...}}
+    refined.docx         approved changes applied to a copy
+    apply_report.json    what was applied and the validation result,
+                         stamped with the decisions version it was made from
+    preview/             page images of the marked copies
+
+The version stamp is what keeps "only approved changes" true even when
+clicks overlap: a refined file or preview made from older decisions is
+never served.
 """
 
 import logging
+import os
 import re
 import shutil
+import tempfile
+import threading
+import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
 from app import renderer, storage
-from app.analyzer import AIError, analyse, paragraphs_to_send
+from app.analyzer import AIError, analyse, paragraphs_to_send, person_name_words
 from app.config import settings
 from app.decisions import DecisionError, make_decision, summarise
-from app.docx_editor import Change, apply_changes, mark_original
+from app.docx_editor import Change, apply_changes, mark_original, neutralise_external_links
 from app.docx_reader import read_resume
+from app.limits import BodySizeLimitMiddleware, check_analysis_allowed, check_upload_allowed
 from app.page_fit import page_fit
 from app.schemas import AnalyzeRequest, DecisionRequest
 from app.suggestion_checks import check_suggestions, clean_evidence
@@ -34,23 +55,84 @@ from app.validator import validate
 logger = logging.getLogger("resume_refiner")
 logging.basicConfig(level=logging.INFO)
 
+EXPIRED = "Your resume was removed or has expired. Please upload it again."
+
+
+# ---------------------------------------------------------------------------
+# Background cleanup
+# ---------------------------------------------------------------------------
+def _cleanup_loop(stop: threading.Event) -> None:
+    """Delete expired sessions every few minutes, even if nobody uploads."""
+    while not stop.wait(settings.cleanup_interval_seconds):
+        try:
+            removed = storage.cleanup_expired_sessions()
+            if removed:
+                logger.info("Cleanup removed %d expired session(s)", removed)
+        except Exception:
+            logger.exception("Cleanup failed")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    stop = threading.Event()
+    thread = threading.Thread(target=_cleanup_loop, args=(stop,), daemon=True)
+    thread.start()
+    yield
+    stop.set()
+
+
 app = FastAPI(
     title=settings.app_name,
     version=settings.api_version,
+    lifespan=lifespan,
+    docs_url="/docs" if settings.enable_api_docs else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if settings.enable_api_docs else None,
+)
+
+# Refuse oversized request bodies before anything else reads them.
+app.add_middleware(BodySizeLimitMiddleware)
+
+
+# Browser security headers on every response.
+_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; "
+    "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+    "frame-ancestors 'none'"
 )
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    # The /docs page loads its scripts from a CDN, so it can't use this policy.
+    if not request.url.path.startswith("/docs"):
+        response.headers["Content-Security-Policy"] = _CSP
+    return response
+
+
+@app.exception_handler(Exception)
+async def unexpected_error(request: Request, exc: Exception):
+    """Anything we didn't plan for: log the type only, show a calm message."""
+    logger.error("Unexpected %s on %s", type(exc).__name__, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Something went wrong on our side. Your original file is unchanged. Please try again."},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
 # Every route starts with /api. This keeps backend URLs clearly separate
 # from frontend pages, and lets the Vite dev server forward exactly these
 # requests to us (see frontend/vite.config.js).
 @app.get("/api/health")
 def health() -> dict:
-    """
-    A tiny endpoint that answers "I am running".
-
-    The frontend calls it on page load to confirm the backend is reachable.
-    Later it is also useful for deployment checks.
-    """
+    """Answers "I am running", and what this server can do."""
     return {
         "status": "ok",
         "app": settings.app_name,
@@ -63,22 +145,90 @@ def health() -> dict:
             "tier": settings.gemini_tier,
         },
         "preview_available": renderer.is_available(),
+        "session_minutes": settings.session_ttl_minutes,
     }
 
 
+# ---------------------------------------------------------------------------
+# Session state helpers
+# ---------------------------------------------------------------------------
+def _check_session(session_id: str) -> Path:
+    if not storage.is_valid_session_id(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session ID.")
+    original = storage.original_path(session_id)
+    if original is None:
+        raise HTTPException(status_code=404, detail=EXPIRED)
+    return original
+
+
+def _load_analysis(session_id: str) -> dict:
+    _check_session(session_id)
+    analysis = storage.load_json(session_id, "analysis.json")
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Please analyse your resume first.")
+    return analysis
+
+
+def _load_decisions(session_id: str, analysis: dict) -> dict:
+    """Decisions for THIS analysis. Leftovers from an older analysis are ignored."""
+    saved = storage.load_json(session_id, "decisions.json")
+    if not saved or saved.get("analysis_id") != analysis["analysis_id"]:
+        return {"analysis_id": analysis["analysis_id"], "version": 0, "items": {}}
+    return saved
+
+
+def _planned_changes(analysis: dict, items: dict) -> list[Change]:
+    """The approved changes, in resume order, ready for the editor."""
+    return [
+        Change(
+            suggestion_id=c["suggestion_id"],
+            paragraph_id=c["paragraph_id"],
+            effect=c["effect"],
+            original_text=c["original_text"],
+            final_text=c["final_text"],
+        )
+        for c in summarise(analysis, items)["changes"]
+    ]
+
+
+def _current_report(session_id: str) -> tuple[dict, dict, dict]:
+    """
+    (analysis, decisions, report) only if a validated refined file exists AND
+    it was made from the current decisions. Call while holding the session lock.
+    """
+    analysis = _load_analysis(session_id)
+    decisions = _load_decisions(session_id, analysis)
+    report = storage.load_json(session_id, "apply_report.json")
+    current = (
+        report is not None
+        and report.get("download_ready")
+        and report.get("analysis_id") == analysis["analysis_id"]
+        and report.get("decisions_version") == decisions["version"]
+        and storage.refined_path(session_id).is_file()
+    )
+    if not current:
+        raise HTTPException(status_code=404, detail="Please create the refined resume first.")
+    return analysis, decisions, report
+
+
+# ---------------------------------------------------------------------------
+# Upload
+# ---------------------------------------------------------------------------
+# Plain `def`: reading a DOCX takes real CPU time. FastAPI runs plain
+# functions in a worker thread, so one slow file can't freeze the server.
+# (`async def` would run it on the single event loop and block everyone.)
 @app.post("/api/resume")
-async def upload_resume(file: UploadFile = File(...)) -> dict:
+def upload_resume(request: Request, file: UploadFile = File(...)) -> dict:
     """
     Receive a DOCX, check it, store it temporarily, and return its outline.
 
     Nothing is sent to any outside service here. The file stays on this server.
     """
-    # Housekeeping: remove sessions older than the time limit.
+    check_upload_allowed(request)
     storage.cleanup_expired_sessions()
 
-    # Read at most one byte more than the limit. If we got that extra byte,
-    # the file is too big, and we never load a huge file fully into memory.
-    data = await file.read(settings.max_upload_bytes + 1)
+    # Read at most one byte more than the limit, to detect oversized files.
+    data = file.file.read(settings.max_upload_bytes + 1)
 
     try:
         validate_docx_upload(file.filename, data)
@@ -87,14 +237,12 @@ async def upload_resume(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=err.status_code, detail=err.message)
 
     session_id = storage.create_session(data)
-
     try:
         outline = read_resume(storage.original_path(session_id))
     except Exception:
-        # The file looked like a DOCX but python-docx couldn't open it.
-        # Don't keep a file we can't use.
+        # The file looked like a DOCX but couldn't be read. Don't keep it.
         storage.delete_session(session_id)
-        logger.exception("Could not read DOCX for session %s", session_id)
+        logger.warning("Could not read DOCX for session %s", session_id)
         raise HTTPException(
             status_code=400,
             detail="This Word document could not be read. It may be damaged.",
@@ -111,23 +259,17 @@ async def upload_resume(file: UploadFile = File(...)) -> dict:
     }
 
 
-# A plain `def` (not `async def`): the AI call blocks while waiting, and
-# FastAPI runs plain functions in a worker thread so other requests continue.
+# ---------------------------------------------------------------------------
+# Analysis
+# ---------------------------------------------------------------------------
 @app.post("/api/resume/{session_id}/analyze")
-def analyze_resume(session_id: str, body: AnalyzeRequest) -> dict:
+def analyze_resume(request: Request, session_id: str, body: AnalyzeRequest) -> dict:
     """
     Compare the uploaded resume with a job description using the AI.
 
     Returns suggestions only. Nothing in the document is changed here.
     """
-    if not storage.is_valid_session_id(session_id):
-        raise HTTPException(status_code=400, detail="Invalid session ID.")
-    original = storage.original_path(session_id)
-    if original is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Your resume was removed or has expired. Please upload it again.",
-        )
+    original = _check_session(session_id)
 
     # The user must agree, every time, before their resume leaves the server.
     if not body.consent:
@@ -153,32 +295,38 @@ def analyze_resume(session_id: str, body: AnalyzeRequest) -> dict:
     if not sent:
         raise HTTPException(status_code=400, detail="We couldn't find resume content to analyse.")
 
+    check_analysis_allowed(request, session_id)
     storage.touch_session(session_id)
+
+    # The AI call is slow, so it happens WITHOUT the lock: the user can
+    # still remove their resume meanwhile.
     try:
         analysis = analyse(outline, job_description)
     except AIError as err:
         raise HTTPException(status_code=err.status_code, detail=err.message)
 
-    suggestions, dropped = check_suggestions(analysis, sent, job_description)
+    suggestions, dropped = check_suggestions(analysis, sent, job_description, person_name_words(outline))
     analysis = clean_evidence(analysis, sent)
 
-    # Give each kept suggestion a short ID for the approve/reject step.
     result = {
+        # A new random ID per analysis. Decisions are tied to it, so choices
+        # made on an older analysis can never be applied to a newer one.
+        "analysis_id": uuid.uuid4().hex,
         "role_title": analysis.role_title,
         "fit_summary": analysis.fit_summary,
         "requirements": [r.model_dump() for r in analysis.requirements],
-        "suggestions": [
-            {"id": f"s{i + 1}", **s.model_dump()} for i, s in enumerate(suggestions)
-        ],
+        "suggestions": [{"id": f"s{i + 1}", **s.model_dump()} for i, s in enumerate(suggestions)],
         "dropped": [d.__dict__ for d in dropped],
         "questions_for_user": analysis.questions_for_user,
         "no_changes_needed": analysis.no_changes_needed and not suggestions,
         "model": settings.gemini_model,
     }
-    storage.save_json(session_id, "analysis.json", result)
-    # A new analysis has new suggestions, so earlier decisions no longer apply.
-    storage.delete_json(session_id, "decisions.json")
-    storage.clear_refined(session_id)
+
+    with storage.session_lock(session_id):
+        _check_session(session_id)  # it may have been removed while the AI worked
+        storage.save_json(session_id, "analysis.json", result)
+        storage.delete_json(session_id, "decisions.json")
+        storage.clear_refined(session_id)
 
     logger.info(
         "Session %s analysed: %d suggestions kept, %d dropped, %d questions",
@@ -187,144 +335,152 @@ def analyze_resume(session_id: str, body: AnalyzeRequest) -> dict:
     return result
 
 
-def _load_analysis(session_id: str) -> dict:
-    """Shared checks for the decision routes."""
-    if not storage.is_valid_session_id(session_id):
-        raise HTTPException(status_code=400, detail="Invalid session ID.")
-    if storage.original_path(session_id) is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Your resume was removed or has expired. Please upload it again.",
-        )
-    analysis = storage.load_json(session_id, "analysis.json")
-    if analysis is None:
-        raise HTTPException(status_code=404, detail="Please analyse your resume first.")
-    return analysis
-
-
+# ---------------------------------------------------------------------------
+# Decisions
+# ---------------------------------------------------------------------------
 @app.put("/api/resume/{session_id}/suggestions/{suggestion_id}")
 def decide_suggestion(session_id: str, suggestion_id: str, body: DecisionRequest) -> dict:
     """Save the user's decision on one suggestion. Nothing is applied yet."""
-    analysis = _load_analysis(session_id)
-    suggestion = next((s for s in analysis["suggestions"] if s["id"] == suggestion_id), None)
-    if suggestion is None:
-        raise HTTPException(status_code=404, detail="That suggestion no longer exists.")
+    with storage.session_lock(session_id):
+        analysis = _load_analysis(session_id)
+        if body.analysis_id != analysis["analysis_id"]:
+            raise HTTPException(
+                status_code=409,
+                detail="These suggestions were replaced by a newer analysis. Please refresh the page.",
+            )
+        suggestion = next((s for s in analysis["suggestions"] if s["id"] == suggestion_id), None)
+        if suggestion is None:
+            raise HTTPException(status_code=404, detail="That suggestion no longer exists.")
 
-    try:
-        decision = make_decision(suggestion, body.action, body.text)
-    except DecisionError as err:
-        raise HTTPException(status_code=400, detail=err.message)
+        try:
+            decision = make_decision(suggestion, body.action, body.text)
+        except DecisionError as err:
+            raise HTTPException(status_code=400, detail=err.message)
 
-    decisions = storage.load_json(session_id, "decisions.json") or {}
-    if decision is None:
-        decisions.pop(suggestion_id, None)
-    else:
-        decisions[suggestion_id] = decision
-    storage.save_json(session_id, "decisions.json", decisions)
-    # Any refined file made earlier no longer matches the decisions.
-    storage.clear_refined(session_id)
-    storage.touch_session(session_id)
+        decisions = _load_decisions(session_id, analysis)
+        if decision is None:
+            decisions["items"].pop(suggestion_id, None)
+        else:
+            decisions["items"][suggestion_id] = decision
+        decisions["version"] += 1
+        storage.save_json(session_id, "decisions.json", decisions)
+        # Any refined file or preview made earlier no longer matches.
+        storage.clear_refined(session_id)
+        storage.touch_session(session_id)
 
-    return {"decision": decision, "summary": summarise(analysis, decisions)}
+        return {"decision": decision, "summary": summarise(analysis, decisions["items"])}
 
 
 @app.get("/api/resume/{session_id}/decisions")
 def get_decisions(session_id: str) -> dict:
     """Everything decided so far, and the list of changes that would be applied."""
-    analysis = _load_analysis(session_id)
-    decisions = storage.load_json(session_id, "decisions.json") or {}
-    return {"decisions": decisions, "summary": summarise(analysis, decisions)}
+    with storage.session_lock(session_id):
+        analysis = _load_analysis(session_id)
+        decisions = _load_decisions(session_id, analysis)
+        return {"decisions": decisions["items"], "summary": summarise(analysis, decisions["items"])}
 
 
-def _planned_changes(session_id: str, analysis: dict) -> list[Change]:
-    """The approved changes, in resume order, ready for the editor."""
-    decisions = storage.load_json(session_id, "decisions.json") or {}
-    return [
-        Change(
-            suggestion_id=c["suggestion_id"],
-            paragraph_id=c["paragraph_id"],
-            effect=c["effect"],
-            original_text=c["original_text"],
-            final_text=c["final_text"],
-        )
-        for c in summarise(analysis, decisions)["changes"]
-    ]
-
-
+# ---------------------------------------------------------------------------
+# Apply and download
+# ---------------------------------------------------------------------------
 @app.post("/api/resume/{session_id}/apply")
 def apply_decisions(session_id: str) -> dict:
     """
     Write the approved changes into a copy of the original, then validate it.
 
-    The original stays untouched. Only "change" and "remove" decisions are
-    applied; rejected and undecided suggestions never reach the document.
+    Holds the session lock throughout: a decision clicked meanwhile waits,
+    then withdraws this file, so a stale file is never offered.
     """
-    analysis = _load_analysis(session_id)
-    changes = _planned_changes(session_id, analysis)
-    if not changes:
-        raise HTTPException(
-            status_code=400,
-            detail="There is nothing to apply. Accept, edit or remove at least one suggestion first.",
-        )
+    with storage.session_lock(session_id):
+        analysis = _load_analysis(session_id)
+        decisions = _load_decisions(session_id, analysis)
+        changes = _planned_changes(analysis, decisions["items"])
+        if not changes:
+            raise HTTPException(
+                status_code=400,
+                detail="There is nothing to apply. Accept, edit or remove at least one suggestion first.",
+            )
 
-    original = storage.original_path(session_id)
-    refined = storage.refined_path(session_id)
-    storage.clear_refined(session_id)
-
-    try:
-        result = apply_changes(original, refined, changes)
-    except Exception:
+        original = storage.original_path(session_id)
+        refined = storage.refined_path(session_id)
         storage.clear_refined(session_id)
-        logger.exception("Applying changes failed for session %s", session_id)
-        raise HTTPException(status_code=500, detail="We couldn't create the refined document. Your original is unchanged.")
 
-    applied_ids = {a["paragraph_id"] for a in result.applied}
-    final_texts = {c.paragraph_id: c.final_text for c in changes if c.paragraph_id in applied_ids and c.final_text is not None}
-    report = validate(original, refined, result.applied, final_texts)
+        try:
+            result = apply_changes(original, refined, changes)
+        except Exception:
+            storage.clear_refined(session_id)
+            logger.warning("Applying changes failed for session %s", session_id)
+            raise HTTPException(
+                status_code=500,
+                detail="We couldn't create the refined document. Your original is unchanged.",
+            )
 
-    response = {
-        "applied": result.applied,
-        "skipped": result.skipped,
-        "validation": report.to_dict(),
-        "download_ready": report.ok and bool(result.applied),
-    }
-    storage.save_json(session_id, "apply_report.json", response)
-    if not response["download_ready"]:
-        # Never offer a file that failed its checks.
-        storage.refined_path(session_id).unlink(missing_ok=True)
+        applied_ids = {a["paragraph_id"] for a in result.applied}
+        final_texts = {
+            c.paragraph_id: c.final_text
+            for c in changes
+            if c.paragraph_id in applied_ids and c.final_text is not None
+        }
+        report = validate(original, refined, result.applied, final_texts)
 
-    logger.info(
-        "Session %s applied: %d applied, %d skipped, validation %s",
-        session_id, len(result.applied), len(result.skipped), "passed" if report.ok else "FAILED",
-    )
-    return response
+        response = {
+            "applied": result.applied,
+            "skipped": result.skipped,
+            "validation": report.to_dict(),
+            "download_ready": report.ok and bool(result.applied),
+            "analysis_id": analysis["analysis_id"],
+            "decisions_version": decisions["version"],
+        }
+        storage.save_json(session_id, "apply_report.json", response)
+        if not response["download_ready"]:
+            refined.unlink(missing_ok=True)  # never offer a file that failed its checks
+
+        logger.info(
+            "Session %s applied: %d applied, %d skipped, validation %s",
+            session_id, len(result.applied), len(result.skipped), "passed" if report.ok else "FAILED",
+        )
+        return response
 
 
 @app.get("/api/resume/{session_id}/download")
 def download_refined(session_id: str) -> FileResponse:
     """The validated, refined copy. The frontend gives it the user's file name."""
-    if not storage.is_valid_session_id(session_id):
-        raise HTTPException(status_code=400, detail="Invalid session ID.")
-    report = storage.load_json(session_id, "apply_report.json") if storage.original_path(session_id) else None
-    refined = storage.refined_path(session_id)
-    if not report or not report.get("download_ready") or not refined.is_file():
-        raise HTTPException(status_code=404, detail="There is no refined resume to download. Please create it again.")
-    storage.touch_session(session_id)
+    with storage.session_lock(session_id):
+        try:
+            _current_report(session_id)
+        except HTTPException as err:
+            if err.detail == EXPIRED:
+                raise
+            raise HTTPException(status_code=404, detail="There is no refined resume to download. Please create it again.")
+        # Copy while holding the lock, so a decision clicked right now can't
+        # delete the file halfway through sending it.
+        fd, name = tempfile.mkstemp(prefix="refined-", suffix=".docx")
+        os.close(fd)
+        snapshot = Path(name)
+        shutil.copyfile(storage.refined_path(session_id), snapshot)
+        storage.touch_session(session_id)
+
     return FileResponse(
-        refined,
+        snapshot,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename="resume-refined.docx",
         headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(lambda: snapshot.unlink(missing_ok=True)),
     )
 
 
-def _ready_report(session_id: str) -> dict:
-    """The apply report, only if a validated refined file exists."""
-    _load_analysis(session_id)  # session and analysis checks
-    report = storage.load_json(session_id, "apply_report.json")
-    if not report or not report.get("download_ready") or not storage.refined_path(session_id).is_file():
-        raise HTTPException(status_code=404, detail="Please create the refined resume first.")
-    return report
+# ---------------------------------------------------------------------------
+# Preview and page limit
+# ---------------------------------------------------------------------------
+# One preview build at a time per session, so two identical requests (e.g.
+# React running an effect twice in development) don't render twice.
+_preview_locks: dict[str, threading.Lock] = {}
+_preview_locks_guard = threading.Lock()
+
+
+def _preview_lock(session_id: str) -> threading.Lock:
+    with _preview_locks_guard:
+        return _preview_locks.setdefault(session_id, threading.Lock())
 
 
 @app.get("/api/resume/{session_id}/preview")
@@ -332,48 +488,73 @@ def preview(session_id: str) -> dict:
     """
     Page images of the original and the refined resume, with page counts.
 
-    The images are made from marked copies: in "before", lines that change
-    are yellow and removed lines red; in "after", changed words are yellow.
-    Slow on a small server (it lays out two documents), so results are
-    kept until a decision changes.
+    The images come from marked copies: in "before", lines that change are
+    yellow and removed lines red; in "after", changed words are yellow.
+
+    Rendering is slow, so it runs in a private temp folder WITHOUT the
+    session lock (the user can keep clicking). The result is only saved if
+    the decisions are still the same when it finishes.
     """
-    report = _ready_report(session_id)
-    folder = storage.preview_dir(session_id)
-    cached = folder / "preview.json"
-    if cached.is_file():
-        return storage.load_json(session_id, "preview/preview.json")
+    with _preview_lock(session_id):
+        with storage.session_lock(session_id):
+            analysis, decisions, report = _current_report(session_id)
+            cached = storage.load_json(session_id, "preview/preview.json")
+            if cached and cached.get("decisions_version") == decisions["version"]:
+                return cached
+            if not renderer.is_available():
+                return {"available": False, "message": "Preview isn't available on this server."}
+            changes = _planned_changes(analysis, decisions["items"])
+            version = decisions["version"]
+            original = storage.original_path(session_id)
+            work = Path(tempfile.mkdtemp(prefix="preview-"))
+            shutil.copyfile(original, work / "original.docx")
 
-    if not renderer.is_available():
-        return {"available": False, "message": "Preview isn't available on this server."}
+        try:
+            marked_before = work / "marked-before.docx"
+            marked_after = work / "marked-after.docx"
+            mark_original(work / "original.docx", marked_before, report["applied"])
+            apply_changes(work / "original.docx", marked_after, changes, highlight=True)
+            # Don't let LibreOffice follow links to outside files or URLs.
+            neutralise_external_links(marked_before)
+            neutralise_external_links(marked_after)
+            images_dir = work / "images"
+            before = renderer.render(marked_before, images_dir, "before")
+            after = renderer.render(marked_after, images_dir, "after")
+        except renderer.RenderError as err:
+            shutil.rmtree(work, ignore_errors=True)
+            raise HTTPException(status_code=503, detail=str(err))
+        except Exception:
+            shutil.rmtree(work, ignore_errors=True)
+            raise
 
-    analysis = _load_analysis(session_id)
-    original = storage.original_path(session_id)
-    folder.mkdir(parents=True, exist_ok=True)
-    marked_before = folder / "marked-before.docx"
-    marked_after = folder / "marked-after.docx"
-    try:
-        mark_original(original, marked_before, report["applied"])
-        apply_changes(original, marked_after, _planned_changes(session_id, analysis), highlight=True)
-        before = renderer.render(marked_before, folder, "before")
-        after = renderer.render(marked_after, folder, "after")
-    except renderer.RenderError as err:
-        shutil.rmtree(folder, ignore_errors=True)
-        raise HTTPException(status_code=503, detail=str(err))
-    finally:
-        # The marked .docx copies were only needed to draw the images.
-        marked_before.unlink(missing_ok=True)
-        marked_after.unlink(missing_ok=True)
+        try:
+            with storage.session_lock(session_id):
+                analysis, decisions, _ = _current_report(session_id)
+                if decisions["version"] != version:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Your choices changed while the preview was being drawn. Please create the refined resume again.",
+                    )
+                folder = storage.preview_dir(session_id)
+                shutil.rmtree(folder, ignore_errors=True)
+                folder.mkdir(parents=True)
+                for image in [*before.images, *after.images]:
+                    shutil.move(str(image), folder / image.name)
 
-    base = f"/api/resume/{session_id}/preview"
-    result = {
-        "available": True,
-        "before": {"pages": before.pages, "images": [f"{base}/{p.name}" for p in before.images]},
-        "after": {"pages": after.pages, "images": [f"{base}/{p.name}" for p in after.images]},
-        "max_preview_pages": renderer.MAX_PREVIEW_PAGES,
-    }
-    storage.save_json(session_id, "preview/preview.json", result)
-    logger.info("Session %s preview: %d -> %d pages", session_id, before.pages, after.pages)
-    return result
+                base = f"/api/resume/{session_id}/preview"
+                result = {
+                    "available": True,
+                    "before": {"pages": before.pages, "images": [f"{base}/{p.name}" for p in before.images]},
+                    "after": {"pages": after.pages, "images": [f"{base}/{p.name}" for p in after.images]},
+                    "max_preview_pages": renderer.MAX_PREVIEW_PAGES,
+                    "decisions_version": version,
+                }
+                storage.save_json(session_id, "preview/preview.json", result)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)  # marked copies never outlive the request
+
+        logger.info("Session %s preview: %d -> %d pages", session_id, before.pages, after.pages)
+        return result
 
 
 _PREVIEW_IMAGE = re.compile(r"^(before|after)-\d{1,2}\.png$")
@@ -394,15 +575,17 @@ def check_page_fit(session_id: str, max_pages: int) -> dict:
     """Does the refined resume fit `max_pages`? If not, options to choose from."""
     if not 1 <= max_pages <= 10:
         raise HTTPException(status_code=400, detail="Choose between 1 and 10 pages.")
-    _ready_report(session_id)
-    shown = storage.load_json(session_id, "preview/preview.json")
-    if not shown or not shown.get("available"):
-        raise HTTPException(status_code=404, detail="Please load the preview first.")
-    analysis = _load_analysis(session_id)
-    decisions = storage.load_json(session_id, "decisions.json") or {}
-    return page_fit(analysis, decisions, shown["after"]["pages"], max_pages)
+    with storage.session_lock(session_id):
+        analysis, decisions, _ = _current_report(session_id)
+        shown = storage.load_json(session_id, "preview/preview.json")
+        if not shown or not shown.get("available") or shown.get("decisions_version") != decisions["version"]:
+            raise HTTPException(status_code=404, detail="Please load the preview first.")
+        return page_fit(analysis, decisions["items"], shown["after"]["pages"], max_pages)
 
 
+# ---------------------------------------------------------------------------
+# Delete
+# ---------------------------------------------------------------------------
 @app.delete("/api/resume/{session_id}", status_code=204)
 def delete_resume(session_id: str) -> Response:
     """Delete an uploaded resume right away, at the user's request."""
@@ -410,6 +593,8 @@ def delete_resume(session_id: str) -> Response:
         raise HTTPException(status_code=400, detail="Invalid session ID.")
     if not storage.delete_session(session_id):
         raise HTTPException(status_code=404, detail="This resume was already removed.")
+    with _preview_locks_guard:
+        _preview_locks.pop(session_id, None)
     logger.info("Session %s deleted by user", session_id)
     return Response(status_code=204)
 

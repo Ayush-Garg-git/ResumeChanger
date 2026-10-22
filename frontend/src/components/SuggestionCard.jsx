@@ -76,10 +76,11 @@ function Proposal({ s }) {
   );
 }
 
-export default function SuggestionCard({ s, decision, onDecide }) {
+export default function SuggestionCard({ s, decision, onDecide, locked = false }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busyHere, setBusy] = useState(false);
+  const busy = busyHere || locked;
   const [error, setError] = useState("");
 
   async function run(action, text = null) {

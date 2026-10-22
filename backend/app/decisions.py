@@ -25,6 +25,13 @@ REWRITE_KINDS = {"shorten", "reword", "emphasise"}
 MAX_EDIT_CHARS = 1000
 
 
+def _tidy(text: str) -> str:
+    """Line breaks to spaces, repeated spaces to one, keep tabs, trim ends."""
+    text = re.sub(r"[\r\n]+", " ", text)
+    text = re.sub(r" {2,}", " ", text)
+    return text.strip(" ")
+
+
 class DecisionError(Exception):
     """A decision that can't be saved, explained for the user."""
 
@@ -56,13 +63,15 @@ def make_decision(suggestion: dict, action: str, text: str | None) -> dict | Non
         raise DecisionError("This suggestion has no proposed change to accept. Keep it or edit it.")
 
     if action == "edit":
-        # One paragraph, single spaces: line breaks would split it in Word.
-        edited = re.sub(r"\s+", " ", text or "").strip()
+        # One paragraph: line breaks become spaces (they would add a new
+        # line in Word). Tabs are kept: many resumes use a tab to push dates
+        # to the right edge, and losing it would break that alignment.
+        edited = _tidy(text or "")
         if not edited:
             raise DecisionError("Your edit is empty. To remove the line, use Remove line or Keep.")
         if len(edited) > MAX_EDIT_CHARS:
             raise DecisionError(f"Your edit is longer than {MAX_EDIT_CHARS} characters.")
-        if re.sub(r"\s+", " ", original).strip() == edited:
+        if _tidy(original) == edited:
             raise DecisionError("Your edit is the same as the original line. Choose Keep instead.")
         if any(ph in edited for ph in ("[email]", "[phone]", "[link]")):
             raise DecisionError("Your edit contains a placeholder like [email]. Please write the real text.")

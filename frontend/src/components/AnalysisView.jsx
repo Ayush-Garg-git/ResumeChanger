@@ -19,11 +19,14 @@ export default function AnalysisView({ sessionId, fileName, analysis, onStartOve
   // Result of "Create refined resume". Cleared whenever a decision changes,
   // because the server withdraws the old file at that point too.
   const [applyResult, setApplyResult] = useState(null);
+  // While "Create refined resume" runs, the cards are locked, so a click
+  // can't change a decision halfway through creating the file.
+  const [creating, setCreating] = useState(false);
 
   async function decide(suggestionId, action, text) {
     // The server checks the decision first; we only update the screen
     // once it has been saved. Errors are shown on the card.
-    const result = await decideSuggestion(sessionId, suggestionId, action, text);
+    const result = await decideSuggestion(sessionId, analysis.analysis_id, suggestionId, action, text);
     setDecisions((prev) => {
       const next = { ...prev };
       if (result.decision) next[suggestionId] = result.decision;
@@ -52,6 +55,14 @@ export default function AnalysisView({ sessionId, fileName, analysis, onStartOve
         </p>
       )}
 
+      {!analysis.no_changes_needed && suggestions.length === 0 && (
+        <p className="message message-warn">
+          We didn't find any safe changes to suggest for this job.
+          {questions.length > 0 && " See the questions below about what the job asks for."}
+          {dropped.length > 0 && " Some ideas were removed by our safety checks; you can see why at the bottom."}
+        </p>
+      )}
+
       {requirements.length > 0 && (
         <details className="block" open>
           <summary>What the job asks for ({requirements.length})</summary>
@@ -77,7 +88,13 @@ export default function AnalysisView({ sessionId, fileName, analysis, onStartOve
           <h3 className="block-title">Suggested changes ({suggestions.length})</h3>
           <ul className="suggestion-list">
             {suggestions.map((s) => (
-              <SuggestionCard key={s.id} s={s} decision={decisions[s.id]} onDecide={decide} />
+              <SuggestionCard
+                key={s.id}
+                s={s}
+                decision={decisions[s.id]}
+                onDecide={decide}
+                locked={creating}
+              />
             ))}
           </ul>
         </>
@@ -123,6 +140,8 @@ export default function AnalysisView({ sessionId, fileName, analysis, onStartOve
           result={applyResult}
           onResult={setApplyResult}
           onDecide={decide}
+          creating={creating}
+          onCreatingChange={setCreating}
         />
       )}
     </section>
