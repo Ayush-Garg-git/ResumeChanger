@@ -195,3 +195,69 @@ def test_health_reports_ai_setup(monkeypatch):
 def test_schema_sent_to_gemini_is_the_pydantic_schema(sample_resume, fake_ai):
     _analyse(_upload(sample_resume))
     assert "suggestions" in fake_ai["schema"]["properties"]
+
+
+# --- Automatic retries when Gemini is briefly busy --------------------------
+
+class _Busy(Exception):
+    status_code = 503
+
+
+class _BadRequest(Exception):
+    status_code = 400
+
+
+@pytest.fixture
+def no_wait(monkeypatch):
+    monkeypatch.setattr(analyzer, "RETRY_DELAYS", (0, 0))
+
+
+def test_busy_once_then_success_is_invisible_to_the_user(sample_resume, fake_ai, no_wait, monkeypatch):
+    calls = []
+
+    def flaky(prompt, schema):
+        calls.append(1)
+        if len(calls) == 1:
+            raise _Busy("overloaded")
+        return json.dumps(GOOD_ANSWER)
+
+    monkeypatch.setattr(analyzer, "call_model", flaky)
+    response = _analyse(_upload(sample_resume))
+    assert response.status_code == 200
+    assert len(calls) == 2
+
+
+def test_still_busy_after_retries_says_so(sample_resume, fake_ai, no_wait, monkeypatch):
+    calls = []
+
+    def busy(prompt, schema):
+        calls.append(1)
+        raise _Busy("overloaded")
+
+    monkeypatch.setattr(analyzer, "call_model", busy)
+    response = _analyse(_upload(sample_resume))
+    assert response.status_code == 503
+    assert "busy" in response.json()["detail"]
+    assert len(calls) == 3  # first try + two retries
+
+
+@pytest.mark.parametrize("error_cls", [_BadRequest])
+def test_bad_requests_are_not_retried(sample_resume, fake_ai, no_wait, monkeypatch, error_cls):
+    calls = []
+
+    def bad(prompt, schema):
+        calls.append(1)
+        raise error_cls("bad")
+
+    monkeypatch.setattr(analyzer, "call_model", bad)
+    response = _analyse(_upload(sample_resume))
+    assert response.status_code == 502
+    assert len(calls) == 1
+
+
+def test_rate_limit_is_not_retried(sample_resume, fake_ai, no_wait):
+    class RateLimited(Exception):
+        status_code = 429
+    fake_ai["error"] = RateLimited("quota")
+    response = _analyse(_upload(sample_resume))
+    assert response.status_code == 429

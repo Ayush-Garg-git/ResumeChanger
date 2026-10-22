@@ -21,6 +21,7 @@ Automatic masking can miss unusual formats, and the consent notice says so.
 import json
 import logging
 import re
+import time
 
 from pydantic import BaseModel, ValidationError
 
@@ -192,7 +193,48 @@ def _friendly_error(err: Exception) -> AIError:
         )
     if "timeout" in name:
         return AIError("The AI took too long to answer. Please try again.", status_code=504)
+    if _is_temporary(err):
+        return AIError(
+            "Google Gemini is busy right now. Please try again in a minute.", status_code=503
+        )
+    if status == 400:
+        return AIError(
+            "The AI couldn't process this request. Please try again; if it keeps happening, "
+            "try a shorter job description.",
+            status_code=502,
+        )
     return AIError("The AI service had a problem. Please try again shortly.", status_code=502)
+
+
+# Waits before each automatic retry, in seconds. Two retries in total.
+RETRY_DELAYS = (2.0, 5.0)
+
+
+def _is_temporary(err: Exception) -> bool:
+    """
+    Errors worth retrying: the service was busy or the connection dropped.
+    NOT retried: our request was wrong (400), the key (401/403), or the
+    quota (429). Retrying those would only waste time or quota.
+    """
+    status = getattr(err, "status_code", None)
+    name = type(err).__name__.lower()
+    return (isinstance(status, int) and status >= 500) or (status is None and "connection" in name)
+
+
+def _call_with_retries(prompt: str, schema: dict) -> str:
+    """Call the AI; if it's briefly busy, wait and try again (twice at most)."""
+    for attempt, delay in enumerate((*RETRY_DELAYS, None), start=1):
+        try:
+            return call_model(prompt, schema)
+        except Exception as err:
+            if delay is None or not _is_temporary(err):
+                raise
+            # Type and status only: provider messages can echo the input.
+            logger.info(
+                "AI busy (%s, status %s); retry %d in %.0fs",
+                type(err).__name__, getattr(err, "status_code", None), attempt, delay,
+            )
+            time.sleep(delay)
 
 
 def ask_model(prompt: str, answer_shape: type[BaseModel]):
@@ -207,7 +249,7 @@ def ask_model(prompt: str, answer_shape: type[BaseModel]):
         )
 
     try:
-        raw = call_model(prompt, answer_shape.model_json_schema())
+        raw = _call_with_retries(prompt, answer_shape.model_json_schema())
     except AIError:
         raise
     except Exception as err:
