@@ -163,8 +163,21 @@ def call_model(prompt: str, schema: dict) -> str:
     # Imported here so the rest of the app (and the tests) work even
     # if the Gemini SDK isn't installed.
     from google import genai
+    from google.genai import types
 
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = genai.Client(
+        api_key=settings.gemini_api_key,
+        # Switch off the library's own hidden retries (by default it sends
+        # up to 4 requests per call on busy or quota errors, waiting between
+        # them). Live logs showed those stacking with our retries: one click
+        # became a dozen requests and minutes of waiting, and used up the
+        # free quota. Our own code retries instead, within a time limit.
+        # The library can't be set to zero retries, so we tell it to retry
+        # only on status 599, which never happens.
+        http_options=types.HttpOptions(
+            retry_options=types.HttpRetryOptions(attempts=1, http_status_codes=[599])
+        ),
+    )
     interaction = client.interactions.create(
         model=settings.gemini_model,
         input=prompt,

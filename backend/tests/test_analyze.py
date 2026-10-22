@@ -307,7 +307,8 @@ def test_thinking_level_is_sent_to_gemini(monkeypatch):
             return types.SimpleNamespace(output_text="{}")
 
     class FakeClient:
-        def __init__(self, api_key):
+        def __init__(self, api_key, http_options=None):
+            seen["http_options"] = http_options
             self.interactions = FakeInteractions()
 
     from google import genai as real_genai
@@ -316,3 +317,43 @@ def test_thinking_level_is_sent_to_gemini(monkeypatch):
     analyzer.call_model("prompt", {"type": "object"})
     assert seen["generation_config"] == {"thinking_level": "low"}
     assert seen["timeout"] == settings.ai_timeout_seconds
+
+
+def test_gemini_library_sends_exactly_one_request_per_call(monkeypatch):
+    # A local stand-in for Google that always answers "503 busy". The real
+    # library is used, so this checks its hidden retries are really off.
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    hits = []
+
+    class Busy(BaseHTTPRequestHandler):
+        def do_POST(self):
+            hits.append(1)
+            self.rfile.read(int(self.headers.get("content-length", 0)))
+            body = b'{"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}}'
+            self.send_response(503)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Busy)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    from google.genai import types
+    real_options = types.HttpOptions
+
+    def local_options(**kwargs):
+        return real_options(base_url=f"http://127.0.0.1:{server.server_address[1]}", **kwargs)
+
+    monkeypatch.setattr(types, "HttpOptions", local_options)
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key")
+    with pytest.raises(Exception) as err:
+        analyzer.call_model("prompt", {"type": "object"})
+    server.shutdown()
+    assert getattr(err.value, "status_code", None) == 503
+    assert len(hits) == 1
