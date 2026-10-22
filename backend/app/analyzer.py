@@ -22,6 +22,8 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 
 from pydantic import BaseModel, ValidationError
 
@@ -171,6 +173,10 @@ def call_model(prompt: str, schema: dict) -> str:
             "mime_type": "application/json",
             "schema": schema,
         },
+        # How long Gemini "thinks" before answering. The default (medium)
+        # is slow for this task; "low" answers much faster, and our own
+        # checks catch the mistakes that matter.
+        generation_config={"thinking_level": settings.gemini_thinking_level},
         timeout=settings.ai_timeout_seconds,
     )
     return interaction.output_text or ""
@@ -221,13 +227,38 @@ def _is_temporary(err: Exception) -> bool:
     return (isinstance(status, int) and status >= 500) or (status is None and "connection" in name)
 
 
+class _OutOfTime(Exception):
+    """Our own overall time limit for one AI request ran out."""
+
+
+# AI calls run in these worker threads, so OUR code decides when to stop
+# waiting. A library's own timeout isn't enough on its own: earlier, one
+# request waited more than 6 minutes. If we stop waiting, the thread is
+# left to finish (or time out) on its own; the user gets an answer now.
+_ai_workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ai")
+
+
 def _call_with_retries(prompt: str, schema: dict) -> str:
-    """Call the AI; if it's briefly busy, wait and try again (twice at most)."""
+    """
+    Call the AI; if it's briefly busy, wait and try again (twice at most).
+    Everything, retries included, must finish within ai_total_seconds.
+    """
+    deadline = time.monotonic() + settings.ai_total_seconds
     for attempt, delay in enumerate((*RETRY_DELAYS, None), start=1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _OutOfTime()
+        started = time.monotonic()
+        future = _ai_workers.submit(call_model, prompt, schema)
         try:
-            return call_model(prompt, schema)
+            raw = future.result(timeout=remaining)
+            logger.info("AI answered in %.1fs (attempt %d)", time.monotonic() - started, attempt)
+            return raw
+        except FutureTimeout:
+            logger.warning("AI gave no answer within %.0fs (attempt %d)", remaining, attempt)
+            raise _OutOfTime()
         except Exception as err:
-            if delay is None or not _is_temporary(err):
+            if delay is None or not _is_temporary(err) or time.monotonic() + delay >= deadline:
                 raise
             # Type and status only: provider messages can echo the input.
             logger.info(
@@ -235,6 +266,7 @@ def _call_with_retries(prompt: str, schema: dict) -> str:
                 type(err).__name__, getattr(err, "status_code", None), attempt, delay,
             )
             time.sleep(delay)
+    raise _OutOfTime()
 
 
 def ask_model(prompt: str, answer_shape: type[BaseModel]):
@@ -250,6 +282,12 @@ def ask_model(prompt: str, answer_shape: type[BaseModel]):
 
     try:
         raw = _call_with_retries(prompt, answer_shape.model_json_schema())
+    except _OutOfTime:
+        raise AIError(
+            "The AI took too long to answer, so we stopped waiting. Google Gemini is often "
+            "slow at busy times; please try again in a minute.",
+            status_code=504,
+        )
     except AIError:
         raise
     except Exception as err:

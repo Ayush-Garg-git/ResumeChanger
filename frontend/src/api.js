@@ -13,13 +13,28 @@ function announceIfExpired(status, detail) {
   }
 }
 
+// AI steps get a hard limit in the browser too, a little longer than the
+// server's own (100s) plus time for a sleeping free server to wake up.
+// Whatever happens, the page never waits forever.
+export const AI_WAIT_MS = 150_000;
+
 async function request(path, options = {}) {
+  const { timeoutMs, ...fetchOptions } = options;
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   let response;
   try {
-    response = await fetch(path, options);
-  } catch {
+    response = await fetch(path, controller ? { ...fetchOptions, signal: controller.signal } : fetchOptions);
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(
+        "We stopped waiting after 2½ minutes. Google Gemini is slow right now; please try again in a minute."
+      );
+    }
     // fetch() only throws when no response arrived at all.
     throw new Error("Could not reach the server. Check your connection.");
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 
   // FastAPI sends errors as {"detail": "message"}. Show that message
@@ -60,6 +75,7 @@ export function uploadResume(file) {
 export function analyzeResume(sessionId, jobDescription, consent) {
   return request(`/api/resume/${sessionId}/analyze`, {
     method: "POST",
+    timeoutMs: AI_WAIT_MS,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ job_description: jobDescription, consent }),
   });
@@ -79,6 +95,7 @@ export function decideSuggestion(sessionId, analysisId, suggestionId, action, te
 export function submitAnswers(sessionId, analysisId, answers, consent) {
   return request(`/api/resume/${sessionId}/answers`, {
     method: "POST",
+    timeoutMs: AI_WAIT_MS,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ analysis_id: analysisId, answers, consent }),
   });

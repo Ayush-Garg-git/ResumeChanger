@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { analyzeResume } from "../api.js";
+import useElapsed from "../useElapsed.js";
 
 // Must match the backend limits in config.py.
 const MIN_CHARS = 80;
@@ -10,6 +11,7 @@ export default function JobDescriptionStep({ sessionId, ai, onAnalysed }) {
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const elapsed = useElapsed(busy);
 
   const length = text.trim().length;
   const tooShort = length < MIN_CHARS;
@@ -92,8 +94,14 @@ export default function JobDescriptionStep({ sessionId, ai, onAnalysed }) {
         )}
 
         <button className="button-primary" type="submit" disabled={!canSubmit}>
-          {busy ? "Analysing… this can take up to a minute" : "Analyse resume"}
+          {busy ? `Analysing… ${elapsed}s` : "Analyse resume"}
         </button>
+        {busy && elapsed >= 30 && (
+          <p className="muted small slow-note">
+            Google Gemini is slow right now. We'll keep waiting for up to 2½ minutes,
+            then let you know.
+          </p>
+        )}
       </form>
     </section>
   );

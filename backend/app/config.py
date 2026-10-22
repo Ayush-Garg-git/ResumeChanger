@@ -25,7 +25,7 @@ class Settings:
 
     # Version of the API. Bump it when the API changes in a way the
     # frontend needs to know about.
-    api_version: str = "0.8.1"
+    api_version: str = "0.8.2"
 
     # Where the frontend runs in development. Only used if someone calls the
     # backend directly from the browser instead of through the Vite proxy.
@@ -62,8 +62,15 @@ class Settings:
     # Set to "paid" once you use a paid Gemini key.
     gemini_tier: str = os.getenv("GEMINI_TIER", "free")
 
-    # Seconds to wait for the AI before giving up.
-    ai_timeout_seconds: float = float(os.getenv("AI_TIMEOUT_SECONDS", "90"))
+    # Seconds the AI library waits for one attempt.
+    ai_timeout_seconds: float = float(os.getenv("AI_TIMEOUT_SECONDS", "75"))
+
+    # Our own hard limit for one AI request, retries included. After this,
+    # the user gets a clear message instead of an endless wait.
+    ai_total_seconds: float = float(os.getenv("AI_TOTAL_SECONDS", "100"))
+
+    # How much Gemini "thinks" first: low, medium or high. Low is much faster.
+    gemini_thinking_level: str = os.getenv("GEMINI_THINKING_LEVEL", "low")
 
     # Job description length limits (characters).
     job_description_min_chars: int = 80

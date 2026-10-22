@@ -261,3 +261,58 @@ def test_rate_limit_is_not_retried(sample_resume, fake_ai, no_wait):
     fake_ai["error"] = RateLimited("quota")
     response = _analyse(_upload(sample_resume))
     assert response.status_code == 429
+
+
+# --- Never wait forever ------------------------------------------------------
+
+def test_a_hanging_ai_call_is_cut_off_by_our_own_limit(sample_resume, fake_ai, monkeypatch):
+    import time as _time
+    monkeypatch.setattr(settings, "ai_total_seconds", 0.5)
+
+    def hangs(prompt, schema):
+        _time.sleep(3)  # longer than our limit
+        return json.dumps(GOOD_ANSWER)
+
+    monkeypatch.setattr(analyzer, "call_model", hangs)
+    sid = _upload(sample_resume)
+    started = _time.monotonic()
+    response = _analyse(sid)
+    assert response.status_code == 504
+    assert "took too long" in response.json()["detail"]
+    assert _time.monotonic() - started < 2  # didn't wait for the 3s call
+
+
+def test_retries_stop_when_time_runs_out(sample_resume, fake_ai, monkeypatch):
+    monkeypatch.setattr(settings, "ai_total_seconds", 1.0)
+    monkeypatch.setattr(analyzer, "RETRY_DELAYS", (5.0, 5.0))  # would overrun the limit
+    calls = []
+
+    def busy(prompt, schema):
+        calls.append(1)
+        raise _Busy("overloaded")
+
+    monkeypatch.setattr(analyzer, "call_model", busy)
+    response = _analyse(_upload(sample_resume))
+    assert response.status_code == 503
+    assert len(calls) == 1  # no retry that couldn't finish in time
+
+
+def test_thinking_level_is_sent_to_gemini(monkeypatch):
+    import types
+    seen = {}
+
+    class FakeInteractions:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            return types.SimpleNamespace(output_text="{}")
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.interactions = FakeInteractions()
+
+    from google import genai as real_genai
+    monkeypatch.setattr(real_genai, "Client", FakeClient)
+    monkeypatch.setattr(settings, "gemini_thinking_level", "low")
+    analyzer.call_model("prompt", {"type": "object"})
+    assert seen["generation_config"] == {"thinking_level": "low"}
+    assert seen["timeout"] == settings.ai_timeout_seconds

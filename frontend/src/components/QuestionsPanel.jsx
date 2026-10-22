@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { submitAnswers } from "../api.js";
+import useElapsed from "../useElapsed.js";
 
 // Milestone 4b: the user answers the AI's questions in their own words.
 // "No" answers never leave this page. "Yes" answers go to the AI, which
@@ -15,6 +16,7 @@ export default function QuestionsPanel({ sessionId, analysis, ai, onAnswered }) 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
+  const elapsed = useElapsed(busy);
 
   if (questions.length === 0) return null;
 
@@ -131,7 +133,7 @@ export default function QuestionsPanel({ sessionId, analysis, ai, onAnswered }) 
       )}
 
       <button className="button-primary" onClick={submit} disabled={!canSubmit}>
-        {busy ? "Finding where they fit…" : "Suggest where to add these"}
+        {busy ? `Finding where they fit… ${elapsed}s` : "Suggest where to add these"}
       </button>
       {missingDetails && (
         <p className="muted small">For each Yes, add a few words about where or how you used it.</p>
