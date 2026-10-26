@@ -23,6 +23,7 @@ from app.analyzer import PLACEHOLDERS, ask_model, paragraphs_to_send, person_nam
 from app.docx_reader import ResumeOutline, ResumeParagraph
 from app.suggestion_checks import (
     INFLATION_WORDS,
+    quotes_start_of,
     _PLAIN_WORDS,
     _numbers,
     _squash,
@@ -41,9 +42,11 @@ ADD_KIND = "add_confirmed"
 class Placement(BaseModel):
     question_id: str = Field(description="The question this answer belongs to, e.g. 'q2'.")
     paragraph_id: str = Field(description="The ONE existing paragraph to change, e.g. 'p45'.")
-    original_text: str = Field(description="That paragraph's text, copied exactly.")
+    original_text: str = Field(
+        description="The FIRST FIVE WORDS of that paragraph, copied exactly. Not the whole paragraph."
+    )
     proposed_text: str = Field(description="The whole new paragraph text, with the confirmed item added.")
-    reason: str = Field(description="One plain sentence: why this line is the right place.")
+    reason: str = Field(description="One short plain sentence: why this line is the right place.")
 
 
 class NotPlaced(BaseModel):
@@ -154,7 +157,7 @@ def check_placements(
             continue
 
         original = redact(para.text, name_words)
-        if _squash(pl.original_text) != _squash(original):
+        if not quotes_start_of(pl.original_text, original):
             drop(pl, "It quoted the original line incorrectly.")
             continue
         if any(ph in original for ph in PLACEHOLDERS):

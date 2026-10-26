@@ -48,6 +48,21 @@ def _squash(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
+def quotes_start_of(quote: str, original: str) -> bool:
+    """
+    The AI copies only the opening words of the line it means (writing
+    whole paragraphs back made answers slow). Check those words really
+    are how this line starts: at least 3 words, or the whole line if
+    it's shorter. A full copy of the line passes too.
+    """
+    quote_words = _squash(quote).split()
+    original_words = _squash(original).split()
+    needed = min(3, len(original_words))
+    if len(quote_words) < needed:
+        return False
+    return original_words[: len(quote_words)] == quote_words
+
+
 def _numbers(text: str) -> set[str]:
     return set(re.findall(r"\d+(?:[.,]\d+)?", text))
 
@@ -179,7 +194,7 @@ def check_suggestions(
             continue
 
         original = redact(para.text, name_words)
-        if _squash(s.original_text) != _squash(original):
+        if not quotes_start_of(s.original_text, original):
             drop(s, "It quoted the original line incorrectly.")
             continue
         if any(ph in original for ph in PLACEHOLDERS):

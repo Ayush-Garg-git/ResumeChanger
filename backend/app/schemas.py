@@ -19,6 +19,13 @@ from pydantic import BaseModel, Field
 # --------------------------------------------------------------------------
 # What the AI returns
 # --------------------------------------------------------------------------
+# Caps on how much the AI writes. A screen of suggestions is plenty, and
+# every extra item adds seconds to the wait.
+MAX_REQUIREMENTS = 10
+MAX_SUGGESTIONS = 8
+MAX_QUESTIONS = 5
+
+
 class Requirement(BaseModel):
     requirement: str = Field(
         description="One requirement from the job description, in a few words."
@@ -42,12 +49,16 @@ class Suggestion(BaseModel):
         "consider_removing: the line may be less relevant to this role. "
         "review: the user should look at this line; no rewrite offered."
     )
-    original_text: str = Field(description="The paragraph's text, copied exactly.")
+    # Only the opening words: enough for us to check the AI means the right
+    # line, without making it copy whole paragraphs back (slow to write).
+    original_text: str = Field(
+        description="The FIRST FIVE WORDS of the paragraph, copied exactly. Not the whole paragraph."
+    )
     proposed_text: Optional[str] = Field(
         description="The full replacement text for shorten, reword and emphasise. "
         "null for consider_removing and review."
     )
-    reason: str = Field(description="One or two plain sentences: why this helps for this job.")
+    reason: str = Field(description="One short plain sentence: why this helps for this job.")
     requirement: Optional[str] = Field(
         description="The job requirement this relates to, or null."
     )
@@ -56,16 +67,23 @@ class Suggestion(BaseModel):
 class ResumeAnalysis(BaseModel):
     role_title: str = Field(description="The job title from the job description.")
     fit_summary: str = Field(
-        description="Two or three neutral sentences on how the resume matches the job."
+        description="Two short neutral sentences on how the resume matches the job."
     )
-    requirements: list[Requirement]
+    # maxItems limits are enforced by Gemini while it writes, which keeps
+    # answers short (and fast). We also trim in code, in case.
+    requirements: list[Requirement] = Field(
+        description=f"The job's most important requirements, at most {MAX_REQUIREMENTS}.",
+        json_schema_extra={"maxItems": MAX_REQUIREMENTS},
+    )
     suggestions: list[Suggestion] = Field(
-        description="Only changes worth making. An empty list is a valid answer."
+        description=f"Only changes worth making, at most {MAX_SUGGESTIONS}. An empty list is a valid answer.",
+        json_schema_extra={"maxItems": MAX_SUGGESTIONS},
     )
     questions_for_user: list[str] = Field(
-        description="Questions about job requirements the resume does not show, "
+        description="Short questions about job requirements the resume does not show, "
         "e.g. 'The job asks for Tableau. Have you used it?'. Never add such "
-        "things to the resume yourself."
+        f"things to the resume yourself. At most {MAX_QUESTIONS}.",
+        json_schema_extra={"maxItems": MAX_QUESTIONS},
     )
     no_changes_needed: bool = Field(
         description="true if the resume already fits the job well as it is."

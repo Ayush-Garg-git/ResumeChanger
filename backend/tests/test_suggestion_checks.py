@@ -185,3 +185,50 @@ def test_emphasise_that_changes_words_becomes_reword(sample_resume):
         _suggest("p7", "Tools: Excel, Power BI, Git", "Tools: Power BI, Excel", kind="emphasise"),
     )
     assert kept[0].kind == "reword"
+
+
+# --- Opening words instead of whole lines (faster AI answers) --------------
+
+def test_opening_words_are_enough_to_identify_the_line(sample_resume):
+    kept, dropped = _run(
+        sample_resume,
+        _suggest("p10", "Built a Power BI dashboard",
+                 "Built a Power BI dashboard that regional managers used to track weekly sales."),
+    )
+    assert len(kept) == 1, dropped
+    assert kept[0].original_text == P10  # the real full line is kept for display
+
+
+def test_wrong_opening_words_are_still_caught(sample_resume):
+    kept, dropped = _run(sample_resume, _suggest("p10", "Built a Tableau dashboard", "Built dashboards."))
+    assert not kept and "incorrectly" in dropped[0].why
+
+
+def test_too_few_words_dont_count_as_a_quote(sample_resume):
+    kept, dropped = _run(sample_resume, _suggest("p10", "Built", "Built a Power BI dashboard for managers."))
+    assert not kept and "incorrectly" in dropped[0].why
+
+
+def test_ai_answers_are_capped():
+    from app.schemas import MAX_QUESTIONS, MAX_REQUIREMENTS, MAX_SUGGESTIONS, ResumeAnalysis
+    props = ResumeAnalysis.model_json_schema()["properties"]
+    assert props["requirements"]["maxItems"] == MAX_REQUIREMENTS
+    assert props["suggestions"]["maxItems"] == MAX_SUGGESTIONS
+    assert props["questions_for_user"]["maxItems"] == MAX_QUESTIONS
+
+
+def test_overlong_lists_are_trimmed_even_if_the_model_ignores_the_cap(monkeypatch):
+    import json
+    from app import analyzer
+    from app.config import settings
+    from app.docx_reader import ResumeOutline
+    too_many = {
+        "role_title": "x", "fit_summary": "x", "no_changes_needed": False, "suggestions": [],
+        "requirements": [{"requirement": f"r{i}", "importance": "must_have", "evidence": [], "coverage": "missing"}
+                         for i in range(25)],
+        "questions_for_user": [f"q{i}?" for i in range(12)],
+    }
+    monkeypatch.setattr(settings, "gemini_api_key", "k")
+    monkeypatch.setattr(analyzer, "call_model", lambda prompt, schema: json.dumps(too_many))
+    result = analyzer.analyse(ResumeOutline(), "job")
+    assert len(result.requirements) == 10 and len(result.questions_for_user) == 5
