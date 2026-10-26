@@ -17,6 +17,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from fastapi.testclient import TestClient
 
+from tests.helpers import ai_post
+
 from app import analyzer, main, renderer, storage
 from app.analyzer import build_prompt, redact
 from app.config import settings
@@ -66,7 +68,7 @@ def _upload(path):
 @pytest.fixture
 def sid(sample_resume, ai):
     session_id = _upload(sample_resume).json()["session_id"]
-    assert client.post(f"/api/resume/{session_id}/analyze", json={"job_description": JOB, "consent": True}).status_code == 200
+    assert ai_post(client, f"/api/resume/{session_id}/analyze", json={"job_description": JOB, "consent": True}).status_code == 200
     return session_id
 
 
@@ -115,7 +117,7 @@ def test_1_overlapping_decisions_are_both_kept(sid, monkeypatch):
 
 def test_1_decisions_from_an_older_analysis_are_refused(sid):
     old = _aid(sid)
-    client.post(f"/api/resume/{sid}/analyze", json={"job_description": JOB, "consent": True})
+    ai_post(client, f"/api/resume/{sid}/analyze", json={"job_description": JOB, "consent": True})
     response = _decide(sid, "s1", "accept", analysis_id=old)
     assert response.status_code == 409
 
@@ -229,7 +231,7 @@ def test_4_body_without_declared_length_is_cut_off():
 
 
 def test_4_huge_job_description_is_refused(sid):
-    response = client.post(f"/api/resume/{sid}/analyze", json={"job_description": "x" * 60_000, "consent": True})
+    response = ai_post(client, f"/api/resume/{sid}/analyze", json={"job_description": "x" * 60_000, "consent": True})
     assert response.status_code == 422
 
 
@@ -238,8 +240,8 @@ def test_4_huge_job_description_is_refused(sid):
 def test_5_analyses_per_session_are_limited(sid, monkeypatch):
     monkeypatch.setattr(settings, "analyses_per_session", 2)
     # The fixture already used one analysis.
-    ok = client.post(f"/api/resume/{sid}/analyze", json={"job_description": JOB, "consent": True})
-    blocked = client.post(f"/api/resume/{sid}/analyze", json={"job_description": JOB, "consent": True})
+    ok = ai_post(client, f"/api/resume/{sid}/analyze", json={"job_description": JOB, "consent": True})
+    blocked = ai_post(client, f"/api/resume/{sid}/analyze", json={"job_description": JOB, "consent": True})
     assert ok.status_code == 200
     assert blocked.status_code == 429
 
@@ -248,10 +250,10 @@ def test_5_analyses_per_ip_use_the_proxy_address(sample_resume, ai, monkeypatch)
     monkeypatch.setattr(settings, "analyses_per_ip_per_hour", 1)
     a = _upload(sample_resume).json()["session_id"]
     b = _upload(sample_resume).json()["session_id"]
-    first = client.post(f"/api/resume/{a}/analyze", json={"job_description": JOB, "consent": True},
+    first = ai_post(client, f"/api/resume/{a}/analyze", json={"job_description": JOB, "consent": True},
                         headers={"X-Forwarded-For": "1.1.1.1, 203.0.113.9"})
     # Faking the first entry doesn't help: the proxy's (last) entry counts.
-    second = client.post(f"/api/resume/{b}/analyze", json={"job_description": JOB, "consent": True},
+    second = ai_post(client, f"/api/resume/{b}/analyze", json={"job_description": JOB, "consent": True},
                          headers={"X-Forwarded-For": "8.8.8.8, 203.0.113.9"})
     assert first.status_code == 200 and second.status_code == 429
 

@@ -9,6 +9,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.helpers import ai_post
+
 from app import analyzer, storage
 from app.config import settings
 from app.main import app
@@ -54,7 +56,7 @@ def session_id(sample_resume, monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "test-key")
     files = {"file": ("resume.docx", sample_resume.read_bytes(), "application/octet-stream")}
     sid = client.post("/api/resume", files=files).json()["session_id"]
-    analysed = client.post(f"/api/resume/{sid}/analyze", json={"job_description": JOB, "consent": True})
+    analysed = ai_post(client, f"/api/resume/{sid}/analyze", json={"job_description": JOB, "consent": True})
     assert analysed.status_code == 200, analysed.text
     assert len(analysed.json()["suggestions"]) == 5
     return sid
@@ -166,7 +168,7 @@ def test_decisions_are_saved_for_milestone_5(session_id):
 
 def test_new_analysis_resets_decisions(session_id):
     _decide(session_id, "s2", "accept")
-    client.post(f"/api/resume/{session_id}/analyze", json={"job_description": JOB, "consent": True})
+    ai_post(client, f"/api/resume/{session_id}/analyze", json={"job_description": JOB, "consent": True})
     assert storage.load_json(session_id, "decisions.json") is None
 
 

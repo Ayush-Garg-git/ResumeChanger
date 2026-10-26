@@ -13,6 +13,8 @@ import pytest
 from docx import Document
 from fastapi.testclient import TestClient
 
+from tests.helpers import ai_post
+
 from app import analyzer, storage
 from app.config import settings
 from app.main import app
@@ -73,7 +75,7 @@ def ai(monkeypatch):
 def sid(sample_resume, ai):
     files = {"file": ("r.docx", sample_resume.read_bytes(), "application/octet-stream")}
     session_id = client.post("/api/resume", files=files).json()["session_id"]
-    body = client.post(f"/api/resume/{session_id}/analyze", json={"job_description": JOB, "consent": True}).json()
+    body = ai_post(client, f"/api/resume/{session_id}/analyze", json={"job_description": JOB, "consent": True}).json()
     assert [q["id"] for q in body["questions"]] == ["q1", "q2", "q3"]
     return session_id
 
@@ -83,7 +85,7 @@ def _aid(session_id):
 
 
 def _answer(session_id, answers, consent=True):
-    return client.post(
+    return ai_post(client, 
         f"/api/resume/{session_id}/answers",
         json={"analysis_id": _aid(session_id), "answers": answers, "consent": consent},
     )
@@ -242,8 +244,8 @@ def test_answering_again_replaces_earlier_cards_and_their_decisions(sid, ai):
 
 def test_answers_for_an_older_analysis_are_refused(sid, ai):
     old = _aid(sid)
-    client.post(f"/api/resume/{sid}/analyze", json={"job_description": JOB, "consent": True})
-    response = client.post(f"/api/resume/{sid}/answers",
+    ai_post(client, f"/api/resume/{sid}/analyze", json={"job_description": JOB, "consent": True})
+    response = ai_post(client, f"/api/resume/{sid}/answers",
                            json={"analysis_id": old, "answers": [YES_TABLEAU], "consent": True})
     assert response.status_code == 409
 

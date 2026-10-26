@@ -98,8 +98,8 @@ export default function JobDescriptionStep({ sessionId, ai, onAnalysed }) {
         </button>
         {busy && elapsed >= 30 && (
           <p className="muted small slow-note">
-            Google Gemini is slow right now. We'll keep waiting for up to 2½ minutes,
-            then let you know.
+            Google Gemini is slow right now. It's fine to switch apps or lock your
+            phone: the analysis keeps running and will be here when you come back.
           </p>
         )}
       </form>

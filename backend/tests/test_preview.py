@@ -13,6 +13,8 @@ from docx import Document
 from docx.enum.text import WD_COLOR_INDEX
 from fastapi.testclient import TestClient
 
+from tests.helpers import ai_post
+
 from app import analyzer, renderer, storage
 from app.config import settings
 from app.docx_editor import Change, apply_changes, mark_original
@@ -149,7 +151,7 @@ def applied_session(sample_resume, monkeypatch):
     files = {"file": ("r.docx", sample_resume.read_bytes(), "application/octet-stream")}
     sid = client.post("/api/resume", files=files).json()["session_id"]
     job = "Data Analyst role: Power BI dashboards, SQL, weekly sales reporting for regional managers."
-    client.post(f"/api/resume/{sid}/analyze", json={"job_description": job, "consent": True})
+    ai_post(client, f"/api/resume/{sid}/analyze", json={"job_description": job, "consent": True})
     aid = storage.load_json(sid, "analysis.json")["analysis_id"]
     client.put(f"/api/resume/{sid}/suggestions/s1", json={"action": "accept", "analysis_id": aid})
     assert client.post(f"/api/resume/{sid}/apply").json()["download_ready"]

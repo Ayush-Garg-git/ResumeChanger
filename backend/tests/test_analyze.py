@@ -10,6 +10,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.helpers import ai_post
+
 from app import analyzer
 from app.analyzer import build_prompt, redact
 from app.config import settings
@@ -71,7 +73,7 @@ def _upload(sample_resume):
 
 
 def _analyse(session_id, job=JOB, consent=True):
-    return client.post(
+    return ai_post(client, 
         f"/api/resume/{session_id}/analyze",
         json={"job_description": job, "consent": consent},
     )

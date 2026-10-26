@@ -123,6 +123,8 @@ Browser  ->  Vite dev server (5173)  --/api/*-->  FastAPI (8000)
 
 The Vite dev server forwards every `/api/...` request to FastAPI (see `frontend/vite.config.js`), so the browser only talks to one address and no CORS setup is needed.
 
+**Slow AI steps run as background jobs.** `POST .../analyze` and `POST .../answers` do their quick checks, then return `202` with a `job_id` straight away. The page checks `GET .../jobs/{job_id}` every 2 seconds until the job is `done` or `failed`. A check that fails because the connection dropped (a phone locking or switching networks) is simply retried; the result waits on the server (`app/jobs.py`).
+
 ## Production and deployment
 
 In production there is no Vite server. The `Dockerfile` builds the React app into static files and FastAPI serves them alongside the API, so the whole app is **one service at one URL**:
@@ -159,6 +161,7 @@ backend/
   app/renderer.py      LibreOffice -> PDF -> page images and page count (one at a time)
   app/page_fit.py      page-limit check and the options offered to the user
   app/limits.py        request size limit and rate limits
+  app/jobs.py          background jobs for the slow AI steps
   app/answers.py       turns confirmed answers into suggestions, with answer-only checks
   samples/             fake sample resume and the script that builds it
   tests/               pytest tests

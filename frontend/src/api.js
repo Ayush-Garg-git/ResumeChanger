@@ -13,28 +13,18 @@ function announceIfExpired(status, detail) {
   }
 }
 
-// AI steps get a hard limit in the browser too, a little longer than the
-// server's own (100s) plus time for a sleeping free server to wake up.
-// Whatever happens, the page never waits forever.
-export const AI_WAIT_MS = 150_000;
+// A plain "no reply at all" failure (connection dropped, phone asleep,
+// offline). Marked so the AI job loop can tell it apart from a real error
+// and simply check again.
+class NetworkError extends Error {}
 
 async function request(path, options = {}) {
-  const { timeoutMs, ...fetchOptions } = options;
-  const controller = timeoutMs ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   let response;
   try {
-    response = await fetch(path, controller ? { ...fetchOptions, signal: controller.signal } : fetchOptions);
-  } catch (err) {
-    if (err.name === "AbortError") {
-      throw new Error(
-        "We stopped waiting after 2½ minutes. Google Gemini is slow right now; please try again in a minute."
-      );
-    }
+    response = await fetch(path, options);
+  } catch {
     // fetch() only throws when no response arrived at all.
-    throw new Error("Could not reach the server. Check your connection.");
-  } finally {
-    if (timer) clearTimeout(timer);
+    throw new NetworkError("Could not reach the server. Check your connection and try again.");
   }
 
   // FastAPI sends errors as {"detail": "message"}. Show that message
@@ -72,12 +62,78 @@ export function uploadResume(file) {
   return request("/api/resume", { method: "POST", body: form });
 }
 
-export function analyzeResume(sessionId, jobDescription, consent) {
-  return request(`/api/resume/${sessionId}/analyze`, {
+// --- Slow AI steps run as background jobs on the server -------------------
+// The page starts the job, then checks on it every 2 seconds. If a check
+// fails because the connection dropped (phone locked, app switched, Wi-Fi
+// to mobile data), we simply check again: the result waits on the server.
+const CHECK_EVERY_MS = 2000;
+// Longer than the server's own AI limit (100s), so the server normally
+// reports a clear outcome first. Time the phone spends asleep doesn't count
+// against this: we always check once more before giving up.
+const GIVE_UP_AFTER_MS = 180_000;
+// About 1½ minutes of checks with no reply at all.
+const MAX_MISSED_CHECKS = 45;
+
+// Waits `ms`, but wakes early when the page becomes visible again, so a
+// phone coming back from sleep gets its result right away.
+function pause(ms) {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      resolve();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") done();
+    };
+    const timer = setTimeout(done, ms);
+    document.addEventListener("visibilitychange", onVisible);
+  });
+}
+
+async function runJob(sessionId, startPath, body) {
+  const started = await request(startPath, {
     method: "POST",
-    timeoutMs: AI_WAIT_MS,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ job_description: jobDescription, consent }),
+    body: JSON.stringify(body),
+  });
+  const statusPath = `/api/resume/${sessionId}/jobs/${started.job_id}`;
+  const deadline = Date.now() + GIVE_UP_AFTER_MS;
+  let missed = 0;
+
+  for (;;) {
+    await pause(CHECK_EVERY_MS);
+    let job;
+    try {
+      job = await request(statusPath);
+      missed = 0;
+    } catch (err) {
+      if (!(err instanceof NetworkError)) throw err;
+      missed += 1;
+      if (missed >= MAX_MISSED_CHECKS) {
+        throw new Error(
+          "We lost the connection to the server. Check your internet connection and try again."
+        );
+      }
+      continue; // the job keeps running on the server; check again
+    }
+    if (job.status === "done") return job.result;
+    if (job.status === "failed") {
+      announceIfExpired(job.status_code, job.detail || "");
+      throw new Error(job.detail || "The analysis failed. Please try again.");
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        "This is taking much longer than usual, so we stopped waiting. Please try again in a minute."
+      );
+    }
+  }
+}
+
+export function analyzeResume(sessionId, jobDescription, consent) {
+  return runJob(sessionId, `/api/resume/${sessionId}/analyze`, {
+    job_description: jobDescription,
+    consent,
   });
 }
 
@@ -93,11 +149,10 @@ export function decideSuggestion(sessionId, analysisId, suggestionId, action, te
 
 // answers: [{ question_id, has_it, details }]. Only Yes answers are used.
 export function submitAnswers(sessionId, analysisId, answers, consent) {
-  return request(`/api/resume/${sessionId}/answers`, {
-    method: "POST",
-    timeoutMs: AI_WAIT_MS,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ analysis_id: analysisId, answers, consent }),
+  return runJob(sessionId, `/api/resume/${sessionId}/answers`, {
+    analysis_id: analysisId,
+    answers,
+    consent,
   });
 }
 
@@ -113,7 +168,7 @@ export async function downloadRefined(sessionId, originalName) {
   try {
     response = await fetch(`/api/resume/${sessionId}/download`);
   } catch {
-    throw new Error("Could not reach the server. Check your connection.");
+    throw new NetworkError("Could not reach the server. Check your connection and try again.");
   }
   if (!response.ok) {
     let detail = "";

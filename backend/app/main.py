@@ -28,6 +28,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -37,7 +38,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from app import renderer, storage
+from app import jobs, renderer, storage
 from app.analyzer import AIError, analyse, paragraphs_to_send, person_name_words
 from app.answers import ADD_KIND, MAX_ANSWER_CHARS, place_answers
 from app.config import settings
@@ -263,12 +264,14 @@ def upload_resume(request: Request, file: UploadFile = File(...)) -> dict:
 # ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
-@app.post("/api/resume/{session_id}/analyze")
+@app.post("/api/resume/{session_id}/analyze", status_code=202)
 def analyze_resume(request: Request, session_id: str, body: AnalyzeRequest) -> dict:
     """
-    Compare the uploaded resume with a job description using the AI.
+    Start comparing the resume with a job description using the AI.
 
-    Returns suggestions only. Nothing in the document is changed here.
+    Quick checks happen here and fail straight away. The slow AI part runs
+    as a background job: this returns a job ID at once, and the page checks
+    /jobs/{job_id} until it's done. Nothing in the document is changed.
     """
     original = _check_session(session_id)
 
@@ -298,9 +301,16 @@ def analyze_resume(request: Request, session_id: str, body: AnalyzeRequest) -> d
 
     check_analysis_allowed(request, session_id)
     storage.touch_session(session_id)
+    job_id = jobs.start(
+        session_id, "analysis", lambda: _run_analysis(session_id, outline, sent, job_description)
+    )
+    return {"job_id": job_id, "status": "running"}
 
-    # The AI call is slow, so it happens WITHOUT the lock: the user can
-    # still remove their resume meanwhile.
+
+def _run_analysis(session_id: str, outline, sent, job_description: str) -> dict:
+    """The slow part of an analysis. Runs as a background job."""
+    # The AI call happens WITHOUT the lock: the user can still remove their
+    # resume meanwhile.
     try:
         analysis = analyse(outline, job_description)
     except AIError as err:
@@ -409,7 +419,7 @@ def decide_suggestion(session_id: str, suggestion_id: str, body: DecisionRequest
         }
 
 
-@app.post("/api/resume/{session_id}/answers")
+@app.post("/api/resume/{session_id}/answers", status_code=202)
 def answer_questions(request: Request, session_id: str, body: AnswersRequest) -> dict:
     """
     Turn the user's Yes answers into suggestions (Milestone 4b).
@@ -417,7 +427,8 @@ def answer_questions(request: Request, session_id: str, body: AnswersRequest) ->
     Only Yes answers with the user's own words are sent to the AI. New
     suggestions are added to the analysis as "add_confirmed" cards, which
     the user accepts, edits or rejects like any other. Answering again
-    replaces the earlier answer-based cards.
+    replaces the earlier answer-based cards. Like the analysis, the slow AI
+    part runs as a background job.
     """
     analysis = _load_analysis(session_id)
     if body.analysis_id != analysis["analysis_id"]:
@@ -441,6 +452,14 @@ def answer_questions(request: Request, session_id: str, body: AnswersRequest) ->
 
     outline = read_resume(storage.original_path(session_id))
     check_analysis_allowed(request, session_id)
+    job_id = jobs.start(
+        session_id, "answers", lambda: _run_answers(session_id, analysis, outline, confirmed)
+    )
+    return {"job_id": job_id, "status": "running"}
+
+
+def _run_answers(session_id: str, analysis: dict, outline, confirmed: list[dict]) -> dict:
+    """The slow part of answering questions. Runs as a background job."""
     taken = {s["paragraph_id"] for s in analysis["suggestions"] if s["kind"] != ADD_KIND}
     try:
         kept, dropped, not_placed = place_answers(outline, analysis["role_title"], confirmed, taken)
@@ -480,6 +499,36 @@ def answer_questions(request: Request, session_id: str, body: AnswersRequest) ->
             "not_placed": not_placed,
             "summary": summarise(current, decisions["items"]),
         }
+
+
+_JOB_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
+@app.get("/api/resume/{session_id}/jobs/{job_id}")
+def job_status(session_id: str, job_id: str) -> dict:
+    """
+    How a background AI job is doing. The page asks every couple of seconds.
+
+    Always answers quickly. A failed job is reported with status "failed"
+    and the user-facing message, not as an HTTP error, so the page can tell
+    "the job failed" apart from "this check didn't get through".
+    """
+    _check_session(session_id)
+    if not _JOB_ID.match(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job ID.")
+    record = jobs.get(job_id, session_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="This analysis is no longer running (the server may have restarted). Please try again.",
+        )
+    response = {"status": record["status"], "elapsed": round(time.time() - record["started"])}
+    if record["status"] == "done":
+        response["result"] = record["result"]
+    elif record["status"] == "failed":
+        response["status_code"] = record["status_code"]
+        response["detail"] = record["detail"]
+    return response
 
 
 @app.get("/api/resume/{session_id}/decisions")
@@ -706,6 +755,7 @@ def delete_resume(session_id: str) -> Response:
         raise HTTPException(status_code=404, detail="This resume was already removed.")
     with _preview_locks_guard:
         _preview_locks.pop(session_id, None)
+    jobs.forget_session(session_id)
     logger.info("Session %s deleted by user", session_id)
     return Response(status_code=204)
 
