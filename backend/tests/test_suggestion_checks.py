@@ -229,6 +229,6 @@ def test_overlong_lists_are_trimmed_even_if_the_model_ignores_the_cap(monkeypatc
         "questions_for_user": [f"q{i}?" for i in range(12)],
     }
     monkeypatch.setattr(settings, "gemini_api_key", "k")
-    monkeypatch.setattr(analyzer, "call_model", lambda prompt, schema: json.dumps(too_many))
+    monkeypatch.setattr(analyzer, "call_model", lambda prompt, schema, model=None: json.dumps(too_many))
     result = analyzer.analyse(ResumeOutline(), "job")
     assert len(result.requirements) == 10 and len(result.questions_for_user) == 5

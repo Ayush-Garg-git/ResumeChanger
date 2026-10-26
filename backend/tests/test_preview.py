@@ -146,7 +146,7 @@ def _answer():
 
 @pytest.fixture
 def applied_session(sample_resume, monkeypatch):
-    monkeypatch.setattr(analyzer, "call_model", lambda prompt, schema: json.dumps(_answer()))
+    monkeypatch.setattr(analyzer, "call_model", lambda prompt, schema, model=None: json.dumps(_answer()))
     monkeypatch.setattr(settings, "gemini_api_key", "test-key")
     files = {"file": ("r.docx", sample_resume.read_bytes(), "application/octet-stream")}
     sid = client.post("/api/resume", files=files).json()["session_id"]

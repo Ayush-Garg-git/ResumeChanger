@@ -125,6 +125,8 @@ The Vite dev server forwards every `/api/...` request to FastAPI (see `frontend/
 
 **Slow AI steps run as background jobs.** `POST .../analyze` and `POST .../answers` do their quick checks, then return `202` with a `job_id` straight away. The page checks `GET .../jobs/{job_id}` every 2 seconds until the job is `done` or `failed`. A check that fails because the connection dropped (a phone locking or switching networks) is simply retried; the result waits on the server (`app/jobs.py`).
 
+**Backup model.** If the main model (`GEMINI_MODEL`) is busy or over its free limit, the next attempt goes to `GEMINI_FALLBACK_MODEL` (default `gemini-3.5-flash-lite`), which Google runs separately. The privacy notice names both models. Set `GEMINI_FALLBACK_MODEL=` (empty) to switch it off. Render logs show which model answered: `AI answered in 12.3s (attempt 2, gemini-3.5-flash-lite)`.
+
 ## Production and deployment
 
 In production there is no Vite server. The `Dockerfile` builds the React app into static files and FastAPI serves them alongside the API, so the whole app is **one service at one URL**:

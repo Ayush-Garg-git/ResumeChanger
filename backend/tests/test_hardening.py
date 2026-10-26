@@ -56,7 +56,7 @@ ANSWER = {
 
 @pytest.fixture
 def ai(monkeypatch):
-    monkeypatch.setattr(analyzer, "call_model", lambda prompt, schema: json.dumps(ANSWER))
+    monkeypatch.setattr(analyzer, "call_model", lambda prompt, schema, model=None: json.dumps(ANSWER))
     monkeypatch.setattr(settings, "gemini_api_key", "test-key")
 
 

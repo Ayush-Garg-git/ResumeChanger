@@ -21,6 +21,7 @@ Automatic masking can miss unusual formats, and the consent notice says so.
 import json
 import logging
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -154,9 +155,10 @@ def build_prompt(outline: ResumeOutline, job_description: str) -> str:
 # --------------------------------------------------------------------------
 # Calling Gemini
 # --------------------------------------------------------------------------
-def call_model(prompt: str, schema: dict) -> str:
+def call_model(prompt: str, schema: dict, model: str | None = None) -> str:
     """
-    Send the prompt to Gemini and return its raw JSON text.
+    Send the prompt to Gemini and return its raw JSON text. `model` is
+    the main model unless we are falling back to the backup one.
 
     Kept as a small separate function so tests can replace it with a
     stand-in and run without a key or network access.
@@ -180,7 +182,7 @@ def call_model(prompt: str, schema: dict) -> str:
         ),
     )
     interaction = client.interactions.create(
-        model=settings.gemini_model,
+        model=model or settings.gemini_model,
         input=prompt,
         response_format={
             "type": "text",
@@ -252,34 +254,76 @@ class _OutOfTime(Exception):
 _ai_workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ai")
 
 
+def _is_limit(err: Exception) -> bool:
+    return getattr(err, "status_code", None) == 429
+
+
+def _models_to_try() -> list[str]:
+    """
+    The main model first. If it is busy or over its free limit, the backup
+    model for every later attempt: Google runs each model separately, so
+    the backup often has room when the main one doesn't.
+    """
+    main = settings.gemini_model
+    backup = settings.gemini_fallback_model
+    rest = backup if backup and backup != main else main
+    return [main] + [rest] * len(RETRY_DELAYS)
+
+
+# Which model answered the last request in this thread, so the result
+# can say so. Each AI job runs in its own thread.
+_used = threading.local()
+
+
+def last_model_used() -> str:
+    return getattr(_used, "model", settings.gemini_model)
+
+
 def _call_with_retries(prompt: str, schema: dict) -> str:
     """
-    Call the AI; if it's briefly busy, wait and try again (twice at most).
-    Everything, retries included, must finish within ai_total_seconds.
+    Call the AI; if it's briefly busy, wait and try again (twice at most),
+    switching to the backup model. Everything, retries included, must
+    finish within ai_total_seconds.
     """
     deadline = time.monotonic() + settings.ai_total_seconds
-    for attempt, delay in enumerate((*RETRY_DELAYS, None), start=1):
+    models = _models_to_try()
+    delays = (*RETRY_DELAYS, None)
+    for attempt, (model, delay) in enumerate(zip(models, delays), start=1):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise _OutOfTime()
         started = time.monotonic()
-        future = _ai_workers.submit(call_model, prompt, schema)
+        future = _ai_workers.submit(call_model, prompt, schema, model)
         try:
             raw = future.result(timeout=remaining)
-            logger.info("AI answered in %.1fs (attempt %d)", time.monotonic() - started, attempt)
+            logger.info(
+                "AI answered in %.1fs (attempt %d, %s)", time.monotonic() - started, attempt, model
+            )
+            _used.model = model
             return raw
         except FutureTimeout:
-            logger.warning("AI gave no answer within %.0fs (attempt %d)", remaining, attempt)
+            logger.warning("AI gave no answer within %.0fs (attempt %d, %s)", remaining, attempt, model)
             raise _OutOfTime()
         except Exception as err:
-            if delay is None or not _is_temporary(err) or time.monotonic() + delay >= deadline:
+            next_model = models[attempt] if attempt < len(models) else None
+            # Busy: worth another try. Over the limit: only worth trying a
+            # DIFFERENT model, which has its own limit.
+            worth_retrying = _is_temporary(err) or (
+                _is_limit(err) and next_model is not None and next_model != model
+            )
+            if delay is None or not worth_retrying:
+                raise
+            # A different model has its own capacity, so no need to wait long.
+            wait = min(delay, 1.0) if next_model != model else delay
+            if time.monotonic() + wait >= deadline:
                 raise
             # Type and status only: provider messages can echo the input.
             logger.info(
-                "AI busy (%s, status %s); retry %d in %.0fs",
-                type(err).__name__, getattr(err, "status_code", None), attempt, delay,
+                "AI busy on %s (%s, status %s); retry %d on %s in %.0fs",
+                model, type(err).__name__, getattr(err, "status_code", None),
+                attempt, next_model, wait,
             )
-            time.sleep(delay)
+            time.sleep(wait)
     raise _OutOfTime()
 
 

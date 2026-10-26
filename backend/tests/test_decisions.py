@@ -52,7 +52,7 @@ ANSWER = {
 @pytest.fixture
 def session_id(sample_resume, monkeypatch):
     """An uploaded, analysed resume, ready for decisions."""
-    monkeypatch.setattr(analyzer, "call_model", lambda prompt, schema: json.dumps(ANSWER))
+    monkeypatch.setattr(analyzer, "call_model", lambda prompt, schema, model=None: json.dumps(ANSWER))
     monkeypatch.setattr(settings, "gemini_api_key", "test-key")
     files = {"file": ("resume.docx", sample_resume.read_bytes(), "application/octet-stream")}
     sid = client.post("/api/resume", files=files).json()["session_id"]

@@ -25,7 +25,7 @@ class Settings:
 
     # Version of the API. Bump it when the API changes in a way the
     # frontend needs to know about.
-    api_version: str = "0.9.1"
+    api_version: str = "0.10.0"
 
     # Where the frontend runs in development. Only used if someone calls the
     # backend directly from the browser instead of through the Vite proxy.
@@ -57,6 +57,11 @@ class Settings:
     # Best model on the Gemini free tier as of October 2026. Change it here
     # (or in .env) to upgrade, e.g. to a paid model, without code changes.
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+
+    # Used automatically when the main model is busy or over its free
+    # limit. Google runs each model separately, so a lighter model often
+    # has room when the main one doesn't. Set to "" to switch this off.
+    gemini_fallback_model: str = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite")
 
     # Shown to users before they send anything, so it must be accurate.
     # Set to "paid" once you use a paid Gemini key.

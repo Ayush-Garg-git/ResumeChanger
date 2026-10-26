@@ -60,7 +60,8 @@ export default function JobDescriptionStep({ sessionId, ai, onAnalysed }) {
           <div className="consent">
             <p>
               <strong>Before you continue:</strong> the text of your resume and this job
-              description will be sent to <strong>{ai.provider}</strong> ({ai.model}) for
+              description will be sent to <strong>{ai.provider}</strong> ({ai.model}
+              {ai.fallback_model && `, or ${ai.fallback_model} if that one is busy`}) for
               analysis. We don't send your name, the contact block at the top, or
               sections such as Personal Details, Declaration or References, and we mask
               emails, phone numbers, links and ID numbers we recognise. Automatic masking

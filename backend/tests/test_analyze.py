@@ -55,7 +55,7 @@ def fake_ai(monkeypatch):
     """Replace Gemini with a stand-in. Returns a dict to inspect calls."""
     calls = {"prompt": None, "answer": json.dumps(GOOD_ANSWER), "error": None}
 
-    def fake_call_model(prompt, schema):
+    def fake_call_model(prompt, schema, model=None):
         calls["prompt"] = prompt
         calls["schema"] = schema
         if calls["error"]:
@@ -191,7 +191,8 @@ def test_health_reports_ai_setup(monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "")
     ai = client.get("/api/health").json()["ai"]
     assert ai == {"configured": False, "provider": "Google Gemini",
-                  "model": settings.gemini_model, "tier": settings.gemini_tier}
+                  "model": settings.gemini_model, "tier": settings.gemini_tier,
+                  "fallback_model": settings.gemini_fallback_model}
 
 
 def test_schema_sent_to_gemini_is_the_pydantic_schema(sample_resume, fake_ai):
@@ -217,7 +218,7 @@ def no_wait(monkeypatch):
 def test_busy_once_then_success_is_invisible_to_the_user(sample_resume, fake_ai, no_wait, monkeypatch):
     calls = []
 
-    def flaky(prompt, schema):
+    def flaky(prompt, schema, model=None):
         calls.append(1)
         if len(calls) == 1:
             raise _Busy("overloaded")
@@ -232,7 +233,7 @@ def test_busy_once_then_success_is_invisible_to_the_user(sample_resume, fake_ai,
 def test_still_busy_after_retries_says_so(sample_resume, fake_ai, no_wait, monkeypatch):
     calls = []
 
-    def busy(prompt, schema):
+    def busy(prompt, schema, model=None):
         calls.append(1)
         raise _Busy("overloaded")
 
@@ -247,7 +248,7 @@ def test_still_busy_after_retries_says_so(sample_resume, fake_ai, no_wait, monke
 def test_bad_requests_are_not_retried(sample_resume, fake_ai, no_wait, monkeypatch, error_cls):
     calls = []
 
-    def bad(prompt, schema):
+    def bad(prompt, schema, model=None):
         calls.append(1)
         raise error_cls("bad")
 
@@ -271,7 +272,7 @@ def test_a_hanging_ai_call_is_cut_off_by_our_own_limit(sample_resume, fake_ai, m
     import time as _time
     monkeypatch.setattr(settings, "ai_total_seconds", 0.5)
 
-    def hangs(prompt, schema):
+    def hangs(prompt, schema, model=None):
         _time.sleep(3)  # longer than our limit
         return json.dumps(GOOD_ANSWER)
 
@@ -289,7 +290,7 @@ def test_retries_stop_when_time_runs_out(sample_resume, fake_ai, monkeypatch):
     monkeypatch.setattr(analyzer, "RETRY_DELAYS", (5.0, 5.0))  # would overrun the limit
     calls = []
 
-    def busy(prompt, schema):
+    def busy(prompt, schema, model=None):
         calls.append(1)
         raise _Busy("overloaded")
 
@@ -359,3 +360,98 @@ def test_gemini_library_sends_exactly_one_request_per_call(monkeypatch):
     server.shutdown()
     assert getattr(err.value, "status_code", None) == 503
     assert len(hits) == 1
+
+
+# --- Backup model when the main one is busy or over its limit ----------------
+
+class _Limited(Exception):
+    status_code = 429
+
+
+@pytest.fixture
+def two_models(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_model", "main-model")
+    monkeypatch.setattr(settings, "gemini_fallback_model", "backup-model")
+
+
+def _recording(monkeypatch, fail_on, error_cls):
+    """An AI that fails on the models in `fail_on` and records each model used."""
+    used = []
+
+    def ai(prompt, schema, model=None):
+        used.append(model)
+        if model in fail_on:
+            raise error_cls("no")
+        return json.dumps(GOOD_ANSWER)
+
+    monkeypatch.setattr(analyzer, "call_model", ai)
+    return used
+
+
+def test_busy_main_model_switches_to_the_backup(sample_resume, fake_ai, no_wait, two_models, monkeypatch):
+    used = _recording(monkeypatch, {"main-model"}, _Busy)
+    response = _analyse(_upload(sample_resume))
+    assert response.status_code == 200
+    assert used == ["main-model", "backup-model"]
+    assert response.json()["model"] == "backup-model"  # the result says who answered
+
+
+def test_main_model_over_its_limit_switches_to_the_backup(sample_resume, fake_ai, no_wait, two_models, monkeypatch):
+    # Each model has its own free limit, so the backup is worth one try.
+    used = _recording(monkeypatch, {"main-model"}, _Limited)
+    response = _analyse(_upload(sample_resume))
+    assert response.status_code == 200
+    assert used == ["main-model", "backup-model"]
+
+
+def test_both_over_the_limit_stops_after_one_backup_try(sample_resume, fake_ai, no_wait, two_models, monkeypatch):
+    used = _recording(monkeypatch, {"main-model", "backup-model"}, _Limited)
+    response = _analyse(_upload(sample_resume))
+    assert response.status_code == 429
+    assert used == ["main-model", "backup-model"]  # no third request wasting quota
+
+
+def test_both_busy_uses_every_retry_on_the_backup(sample_resume, fake_ai, no_wait, two_models, monkeypatch):
+    used = _recording(monkeypatch, {"main-model", "backup-model"}, _Busy)
+    response = _analyse(_upload(sample_resume))
+    assert response.status_code == 503
+    assert used == ["main-model", "backup-model", "backup-model"]
+
+
+def test_main_model_answer_is_used_when_it_works(sample_resume, fake_ai, two_models, monkeypatch):
+    used = _recording(monkeypatch, set(), _Busy)
+    response = _analyse(_upload(sample_resume))
+    assert used == ["main-model"]
+    assert response.json()["model"] == "main-model"
+
+
+def test_backup_can_be_switched_off(sample_resume, fake_ai, no_wait, monkeypatch):
+    monkeypatch.setattr(settings, "gemini_model", "main-model")
+    monkeypatch.setattr(settings, "gemini_fallback_model", "")
+    used = _recording(monkeypatch, {"main-model"}, _Limited)
+    response = _analyse(_upload(sample_resume))
+    assert response.status_code == 429
+    assert used == ["main-model"]  # limit errors are not retried on the same model
+
+
+def test_health_names_the_backup_model(two_models):
+    ai = client.get("/api/health").json()["ai"]
+    assert ai["model"] == "main-model" and ai["fallback_model"] == "backup-model"
+
+
+def test_model_name_reaches_gemini(monkeypatch):
+    import types
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, api_key, http_options=None):
+            self.interactions = types.SimpleNamespace(
+                create=lambda **kw: seen.update(kw) or types.SimpleNamespace(output_text="{}")
+            )
+
+    from google import genai as real_genai
+    monkeypatch.setattr(real_genai, "Client", FakeClient)
+    analyzer.call_model("prompt", {"type": "object"}, "backup-model")
+    assert seen["model"] == "backup-model"
+    analyzer.call_model("prompt", {"type": "object"})
+    assert seen["model"] == settings.gemini_model

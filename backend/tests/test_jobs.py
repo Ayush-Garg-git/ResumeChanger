@@ -26,7 +26,7 @@ def slow_ai(monkeypatch):
     """An AI that takes a moment, like the real one."""
     monkeypatch.setattr(settings, "gemini_api_key", "test-key")
 
-    def slow(prompt, schema):
+    def slow(prompt, schema, model=None):
         time.sleep(0.6)
         return json.dumps(GOOD_ANSWER)
 
@@ -90,7 +90,7 @@ def test_a_failed_job_says_why(sample_resume, monkeypatch):
     class RateLimited(Exception):
         status_code = 429
 
-    def limited(prompt, schema):
+    def limited(prompt, schema, model=None):
         raise RateLimited("quota")
 
     monkeypatch.setattr(settings, "gemini_api_key", "test-key")

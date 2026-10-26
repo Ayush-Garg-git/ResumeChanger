@@ -39,7 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
 from app import jobs, renderer, storage
-from app.analyzer import AIError, analyse, paragraphs_to_send, person_name_words
+from app.analyzer import AIError, analyse, last_model_used, paragraphs_to_send, person_name_words
 from app.answers import ADD_KIND, MAX_ANSWER_CHARS, place_answers
 from app.config import settings
 from app.decisions import DecisionError, make_decision, summarise
@@ -144,6 +144,9 @@ def health() -> dict:
             "configured": bool(settings.gemini_api_key),
             "provider": "Google Gemini",
             "model": settings.gemini_model,
+            # Used automatically when the main model is busy. Shown in the
+            # privacy notice too, so users know both names.
+            "fallback_model": settings.gemini_fallback_model or None,
             "tier": settings.gemini_tier,
         },
         "preview_available": renderer.is_available(),
@@ -332,7 +335,7 @@ def _run_analysis(session_id: str, outline, sent, job_description: str) -> dict:
         # IDs so the user can answer each question (Milestone 4b).
         "questions": [{"id": f"q{i + 1}", "text": q} for i, q in enumerate(analysis.questions_for_user)],
         "no_changes_needed": analysis.no_changes_needed and not suggestions,
-        "model": settings.gemini_model,
+        "model": last_model_used(),
     }
 
     with storage.session_lock(session_id):

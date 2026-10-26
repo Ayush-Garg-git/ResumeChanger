@@ -56,7 +56,7 @@ class FakeAI:
         self.prompts = []
         self.placements = {"placements": [], "not_placed": []}
 
-    def __call__(self, prompt, schema):
+    def __call__(self, prompt, schema, model=None):
         self.prompts.append(prompt)
         if "suggestions" in schema["properties"]:
             return json.dumps(ANALYSIS)
