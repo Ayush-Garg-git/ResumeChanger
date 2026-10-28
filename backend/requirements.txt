@@ -13,7 +13,10 @@ python-multipart==0.0.*
 # Reads and edits Word (.docx) files
 python-docx==1.1.*
 
-# Google's official SDK for the Gemini API (AI analysis, Milestone 3)
+# Anthropic's official SDK for the Claude API (the main AI provider)
+anthropic==2.3.*
+
+# Google's official SDK for the Gemini API (the other supported provider)
 google-genai==2.32.*
 
 # Testing: pytest runs the tests, httpx lets FastAPI's TestClient make fake requests

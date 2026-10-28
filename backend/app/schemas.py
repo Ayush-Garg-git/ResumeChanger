@@ -3,9 +3,9 @@ The shapes of data that cross boundaries: what the AI must return, and
 what the frontend sends us.
 
 These are Pydantic models. A Pydantic model does two jobs here:
-1. Its JSON schema is sent to Gemini, which is then forced to answer in
-   exactly this shape ("structured output").
-2. We validate Gemini's answer against the same model, so if anything is
+1. Its JSON schema is sent to the AI (Claude or Gemini), which is then
+   forced to answer in exactly this shape ("structured output").
+2. We validate the AI's answer against the same model, so if anything is
    missing or the wrong type, we find out immediately instead of crashing later.
 
 The `description` texts are read by the AI, so they double as instructions.
@@ -69,8 +69,9 @@ class ResumeAnalysis(BaseModel):
     fit_summary: str = Field(
         description="Two short neutral sentences on how the resume matches the job."
     )
-    # maxItems limits are enforced by Gemini while it writes, which keeps
-    # answers short (and fast). We also trim in code, in case.
+    # maxItems: Gemini enforces it while writing (shorter, faster answers).
+    # Claude doesn't accept it, so it's removed for Claude (claude_schema)
+    # and the limits are in the descriptions; analyse() always trims.
     requirements: list[Requirement] = Field(
         description=f"The job's most important requirements, at most {MAX_REQUIREMENTS}.",
         json_schema_extra={"maxItems": MAX_REQUIREMENTS},
@@ -117,9 +118,15 @@ class AnswersRequest(BaseModel):
     answers: list[Answer] = Field(max_length=20)
     # Sending answers means sending the resume to the AI again.
     consent: bool = False
+    # The AI named in the notice the user agreed to (see AnalyzeRequest).
+    provider: Optional[str] = Field(default=None, max_length=50)
 
 
 class AnalyzeRequest(BaseModel):
     job_description: str = Field(max_length=50_000)
-    # The user ticked "I understand my resume will be sent to Google Gemini".
+    # The user ticked "I understand my resume will be sent to the AI provider".
     consent: bool = False
+    # The AI named in the notice the user agreed to, e.g. "Anthropic Claude".
+    # If the site has switched AI since the page loaded, the consent was for
+    # a different provider, so the request is refused.
+    provider: Optional[str] = Field(default=None, max_length=50)

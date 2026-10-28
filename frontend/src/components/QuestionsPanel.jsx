@@ -37,7 +37,7 @@ export default function QuestionsPanel({ sessionId, analysis, ai, onAnswered }) 
         has_it: a.has_it,
         details: a.has_it ? a.details : "",
       }));
-      const res = await submitAnswers(sessionId, analysis.analysis_id, payload, consent);
+      const res = await submitAnswers(sessionId, analysis.analysis_id, payload, consent, ai?.provider);
       setResult(res);
       onAnswered(res);
     } catch (err) {

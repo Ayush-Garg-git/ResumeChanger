@@ -191,8 +191,9 @@ def test_health_reports_ai_setup(monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "")
     ai = client.get("/api/health").json()["ai"]
     assert ai == {"configured": False, "provider": "Google Gemini",
-                  "model": settings.gemini_model, "tier": settings.gemini_tier,
-                  "fallback_model": settings.gemini_fallback_model}
+                  "model": settings.gemini_model,
+                  "fallback_model": settings.gemini_fallback_model,
+                  "trains_on_data": settings.gemini_tier != "paid"}
 
 
 def test_schema_sent_to_gemini_is_the_pydantic_schema(sample_resume, fake_ai):

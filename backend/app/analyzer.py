@@ -1,7 +1,8 @@
 """
 Asks the AI to compare a resume with a job description.
 
-This is the ONLY file that knows which AI provider we use (Google Gemini).
+This is the ONLY file that knows about AI providers (Anthropic Claude or
+Google Gemini; see PROVIDERS and settings.ai_provider).
 Everything it returns is a *proposal*. suggestion_checks.py then filters
 it, and nothing is ever applied to the document from here.
 
@@ -153,16 +154,154 @@ def build_prompt(outline: ResumeOutline, job_description: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# Calling Gemini
+# Which AI provider
+# --------------------------------------------------------------------------
+# Everything provider-specific lives in this table and in the two
+# _call_* functions below. settings.ai_provider picks the row.
+PROVIDERS = {
+    "claude": {
+        "label": "Anthropic Claude",
+        "key_setting": "anthropic_api_key",
+        "key_name": "ANTHROPIC_API_KEY",
+        "model": "claude_model",
+        "fallback": "claude_fallback_model",
+    },
+    "gemini": {
+        "label": "Google Gemini",
+        "key_setting": "gemini_api_key",
+        "key_name": "GEMINI_API_KEY",
+        "model": "gemini_model",
+        "fallback": "gemini_fallback_model",
+    },
+}
+
+
+def provider_info() -> dict:
+    """What the rest of the app (and the privacy notice) needs to know."""
+    name = settings.ai_provider
+    row = PROVIDERS[name]
+    model = getattr(settings, row["model"])
+    fallback = getattr(settings, row["fallback"])
+    if name == "claude":
+        # Anthropic's commercial terms: API inputs and outputs are not used
+        # to train its models by default. If the company ever opts in to a
+        # data-sharing programme, set CLAUDE_API_TRAINS_ON_DATA=true so the
+        # privacy notice stays true.
+        trains_on_data = settings.claude_trains_on_data
+    else:
+        trains_on_data = settings.gemini_tier != "paid"
+    return {
+        "name": name,
+        "label": row["label"],
+        "key_name": row["key_name"],
+        "configured": bool(getattr(settings, row["key_setting"])),
+        "model": model,
+        "fallback_model": fallback if fallback and fallback != model else None,
+        "trains_on_data": trains_on_data,
+    }
+
+
+# --------------------------------------------------------------------------
+# Calling the AI
 # --------------------------------------------------------------------------
 def call_model(prompt: str, schema: dict, model: str | None = None) -> str:
     """
-    Send the prompt to Gemini and return its raw JSON text. `model` is
-    the main model unless we are falling back to the backup one.
+    Send the prompt to the configured AI and return its raw JSON text.
+    `model` is the main model unless we are falling back to the backup one.
 
     Kept as a small separate function so tests can replace it with a
     stand-in and run without a key or network access.
     """
+    if settings.ai_provider == "claude":
+        return _call_claude(prompt, schema, model or settings.claude_model)
+    return _call_gemini(prompt, schema, model or settings.gemini_model)
+
+
+def claude_schema(schema: dict) -> dict:
+    """
+    Adapt a Pydantic JSON schema to what Claude's structured outputs accept.
+
+    Claude rejects (with a 400 error) length limits such as maxItems,
+    minLength and maxLength, and every object must say
+    additionalProperties: false. Our limits are also written in the field
+    descriptions, and we trim lists in code, so nothing is lost.
+    """
+    if isinstance(schema, list):
+        return [claude_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    dropped = {"maxItems", "minLength", "maxLength", "minimum", "maximum", "multipleOf", "title"}
+    out = {}
+    for key, value in schema.items():
+        if key in dropped:
+            continue
+        if key == "minItems" and value not in (0, 1):
+            continue
+        if key in ("properties", "$defs", "definitions"):
+            # Here keys are field names, which may be anything (even "title").
+            out[key] = {name: claude_schema(sub) for name, sub in value.items()}
+        else:
+            out[key] = claude_schema(value)
+    if out.get("type") == "object":
+        extra = out.get("additionalProperties")
+        if isinstance(extra, dict) or ("properties" not in out and extra is not False):
+            # A free-form map (dict[str, X]). Forcing additionalProperties
+            # to false would only allow {}, so refuse loudly instead.
+            raise ValueError("Claude's structured outputs don't support map fields; use a model with named fields.")
+        out["additionalProperties"] = False
+    return out
+
+
+ANTHROPIC_API_URL = "https://api.anthropic.com"
+
+
+def _quiet_library_logs() -> None:
+    """
+    The Anthropic library logs whole requests (resume text included) when
+    ANTHROPIC_LOG=debug or info is set on the machine. Resume text must
+    never reach logs, so its loggers stay at WARNING whatever that says.
+    """
+    for name in ("anthropic", "httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def _call_claude(prompt: str, schema: dict, model: str) -> str:
+    # Imported here so the app works even if the SDK isn't installed.
+    import anthropic
+
+    _quiet_library_logs()
+
+    client = anthropic.Anthropic(
+        api_key=settings.anthropic_api_key,
+        # Always Anthropic's own address. Without this, the library would
+        # obey an ANTHROPIC_BASE_URL variable if one happens to be set on the
+        # machine (Claude's tools set one), and resumes could go elsewhere.
+        base_url=ANTHROPIC_API_URL,
+        # No hidden retries inside the library: our own code below retries,
+        # switches to the backup model and keeps to the overall time limit.
+        max_retries=0,
+        timeout=settings.ai_timeout_seconds,
+    )
+    response = client.messages.create(
+        model=model,
+        max_tokens=settings.claude_max_tokens,
+        messages=[{"role": "user", "content": prompt}],
+        output_config={
+            "effort": settings.claude_effort,
+            "format": {"type": "json_schema", "schema": claude_schema(schema)},
+        },
+    )
+    if response.stop_reason == "refusal":
+        raise AIError("The AI declined to analyse this request. Please check the job description and try again.")
+    if response.stop_reason == "max_tokens":
+        raise AIError("The AI's answer was too long to finish. Please try again.")
+    texts = [block.text for block in response.content if block.type == "text"]
+    if not texts:
+        raise AIError("The AI returned an empty answer. Please try again.")
+    return texts[0]
+
+
+def _call_gemini(prompt: str, schema: dict, model: str) -> str:
     # Imported here so the rest of the app (and the tests) work even
     # if the Gemini SDK isn't installed.
     from google import genai
@@ -182,7 +321,7 @@ def call_model(prompt: str, schema: dict, model: str | None = None) -> str:
         ),
     )
     interaction = client.interactions.create(
-        model=model or settings.gemini_model,
+        model=model,
         input=prompt,
         response_format={
             "type": "text",
@@ -198,26 +337,52 @@ def call_model(prompt: str, schema: dict, model: str | None = None) -> str:
     return interaction.output_text or ""
 
 
+def _error_text(err: Exception) -> str:
+    """The provider's error message, for matching only. Never logged."""
+    return f"{getattr(err, 'message', '')} {getattr(err, 'body', '')}".lower()
+
+
+def _is_out_of_credit(err: Exception) -> bool:
+    """
+    The monthly credit or a spend limit has run out. Waiting a minute or
+    switching model won't help (they share the same account), so this is
+    never retried, and the user is told plainly.
+    """
+    if getattr(err, "status_code", None) not in (400, 429):
+        return False
+    text = _error_text(err)
+    return any(
+        phrase in text
+        for phrase in ("credit balance is too low", "api usage limits", "enforced_spend_limit_reached")
+    )
+
+
 def _friendly_error(err: Exception) -> AIError:
     """Turn a provider error into a message a user can act on."""
     status = getattr(err, "status_code", None)
     name = type(err).__name__.lower()
+    info = provider_info()
 
+    if _is_out_of_credit(err):
+        return AIError(
+            "This site has used up its AI allowance for now. Please try again later.",
+            status_code=503,
+        )
     if status == 429:
         return AIError(
-            "The free AI limit has been reached for now. Please wait a minute and try again.",
+            "The AI usage limit has been reached for now. Please wait a minute and try again.",
             status_code=429,
         )
     if status in (401, 403):
         return AIError(
-            "The AI service rejected this server's key. The site owner needs to check GEMINI_API_KEY.",
+            f"The AI service rejected this server's key. The site owner needs to check {info['key_name']}.",
             status_code=503,
         )
     if "timeout" in name:
         return AIError("The AI took too long to answer. Please try again.", status_code=504)
     if _is_temporary(err):
         return AIError(
-            "Google Gemini is busy right now. Please try again in a minute.", status_code=503
+            f"{info['label']} is busy right now. Please try again in a minute.", status_code=503
         )
     if status == 400:
         return AIError(
@@ -255,18 +420,19 @@ _ai_workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ai")
 
 
 def _is_limit(err: Exception) -> bool:
-    return getattr(err, "status_code", None) == 429
+    """A rate limit for one model. Not the monthly credit running out."""
+    return getattr(err, "status_code", None) == 429 and not _is_out_of_credit(err)
 
 
 def _models_to_try() -> list[str]:
     """
     The main model first. If it is busy or over its free limit, the backup
-    model for every later attempt: Google runs each model separately, so
-    the backup often has room when the main one doesn't.
+    model for every later attempt: each model has its own capacity and
+    rate limit, so the backup often has room when the main one doesn't.
     """
-    main = settings.gemini_model
-    backup = settings.gemini_fallback_model
-    rest = backup if backup and backup != main else main
+    info = provider_info()
+    main = info["model"]
+    rest = info["fallback_model"] or main
     return [main] + [rest] * len(RETRY_DELAYS)
 
 
@@ -276,7 +442,7 @@ _used = threading.local()
 
 
 def last_model_used() -> str:
-    return getattr(_used, "model", settings.gemini_model)
+    return getattr(_used, "model", None) or provider_info()["model"]
 
 
 def _call_with_retries(prompt: str, schema: dict) -> str:
@@ -304,6 +470,8 @@ def _call_with_retries(prompt: str, schema: dict) -> str:
         except FutureTimeout:
             logger.warning("AI gave no answer within %.0fs (attempt %d, %s)", remaining, attempt, model)
             raise _OutOfTime()
+        except AIError:
+            raise  # our own clear message (e.g. the AI declined): no retry
         except Exception as err:
             next_model = models[attempt] if attempt < len(models) else None
             # Busy: worth another try. Over the limit: only worth trying a
@@ -332,17 +500,19 @@ def ask_model(prompt: str, answer_shape: type[BaseModel]):
     Send a prompt, force the answer into `answer_shape` (a Pydantic model),
     and return it validated. Shared by the analysis and the answers step.
     """
-    if not settings.gemini_api_key:
+    info = provider_info()
+    if not info["configured"]:
         raise AIError(
-            "AI analysis isn't set up on this server yet (GEMINI_API_KEY is missing).",
+            f"AI analysis isn't set up on this server yet ({info['key_name']} is missing).",
             status_code=503,
         )
+    _used.model = None
 
     try:
         raw = _call_with_retries(prompt, answer_shape.model_json_schema())
     except _OutOfTime:
         raise AIError(
-            "The AI took too long to answer, so we stopped waiting. Google Gemini is often "
+            f"The AI took too long to answer, so we stopped waiting. {info['label']} is often "
             "slow at busy times; please try again in a minute.",
             status_code=504,
         )
@@ -351,7 +521,8 @@ def ask_model(prompt: str, answer_shape: type[BaseModel]):
     except Exception as err:
         # Log the error type and status only: provider messages can echo input.
         logger.warning(
-            "AI call failed: %s (status %s)", type(err).__name__, getattr(err, "status_code", None)
+            "AI call failed: %s (status %s)%s", type(err).__name__, getattr(err, "status_code", None),
+            " OUT OF CREDIT: check the API credit balance and spend limits" if _is_out_of_credit(err) else "",
         )
         raise _friendly_error(err)
 
@@ -364,7 +535,8 @@ def ask_model(prompt: str, answer_shape: type[BaseModel]):
 
 def analyse(outline: ResumeOutline, job_description: str) -> ResumeAnalysis:
     analysis = ask_model(build_prompt(outline, job_description), ResumeAnalysis)
-    # Gemini enforces the list limits; trim anyway in case another model doesn't.
+    # Gemini enforces the list limits while writing; Claude can't (see
+    # claude_schema), so trimming here is what guarantees them.
     return analysis.model_copy(update={
         "requirements": analysis.requirements[:MAX_REQUIREMENTS],
         "suggestions": analysis.suggestions[:MAX_SUGGESTIONS],

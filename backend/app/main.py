@@ -39,7 +39,14 @@ from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
 from app import jobs, renderer, storage
-from app.analyzer import AIError, analyse, last_model_used, paragraphs_to_send, person_name_words
+from app.analyzer import (
+    AIError,
+    analyse,
+    last_model_used,
+    paragraphs_to_send,
+    person_name_words,
+    provider_info,
+)
 from app.answers import ADD_KIND, MAX_ANSWER_CHARS, place_answers
 from app.config import settings
 from app.decisions import DecisionError, make_decision, summarise
@@ -76,6 +83,8 @@ def _cleanup_loop(stop: threading.Event) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    for problem in settings.problems():
+        logger.warning("Settings: %s", problem)
     stop = threading.Event()
     thread = threading.Thread(target=_cleanup_loop, args=(stop,), daemon=True)
     thread.start()
@@ -132,6 +141,36 @@ async def unexpected_error(request: Request, exc: Exception):
 # Every route starts with /api. This keeps backend URLs clearly separate
 # from frontend pages, and lets the Vite dev server forward exactly these
 # requests to us (see frontend/vite.config.js).
+def _check_same_provider(agreed_to: str | None) -> None:
+    """
+    Consent is for the AI named in the notice. If the site switched AI
+    (a key added or removed) after the page loaded, ask the user to read
+    the new notice. Pages from before this check send nothing: allowed.
+    """
+    current = provider_info()["label"]
+    if agreed_to is not None and agreed_to != current:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This site now uses {current} instead of {agreed_to}. "
+            "Please reload the page and read the updated privacy notice.",
+        )
+
+
+def _ai_status() -> dict:
+    """Lets the frontend show an accurate privacy notice before analysis."""
+    info = provider_info()
+    return {
+        "configured": info["configured"],
+        "provider": info["label"],
+        "model": info["model"],
+        # Used automatically when the main model is busy. Shown in the
+        # privacy notice too, so users know both names.
+        "fallback_model": info["fallback_model"],
+        # Whether the provider may use what we send to improve its models.
+        "trains_on_data": info["trains_on_data"],
+    }
+
+
 @app.get("/api/health")
 def health() -> dict:
     """Answers "I am running", and what this server can do."""
@@ -140,15 +179,7 @@ def health() -> dict:
         "app": settings.app_name,
         "version": settings.api_version,
         # Lets the frontend show an accurate privacy notice before analysis.
-        "ai": {
-            "configured": bool(settings.gemini_api_key),
-            "provider": "Google Gemini",
-            "model": settings.gemini_model,
-            # Used automatically when the main model is busy. Shown in the
-            # privacy notice too, so users know both names.
-            "fallback_model": settings.gemini_fallback_model or None,
-            "tier": settings.gemini_tier,
-        },
+        "ai": _ai_status(),
         "preview_available": renderer.is_available(),
         "session_minutes": settings.session_ttl_minutes,
     }
@@ -284,6 +315,7 @@ def analyze_resume(request: Request, session_id: str, body: AnalyzeRequest) -> d
             status_code=400,
             detail="Please confirm that your resume may be sent to the AI service.",
         )
+    _check_same_provider(body.provider)
 
     job_description = body.job_description.strip()
     if len(job_description) < settings.job_description_min_chars:
@@ -438,6 +470,7 @@ def answer_questions(request: Request, session_id: str, body: AnswersRequest) ->
         raise HTTPException(status_code=409, detail="These questions were replaced by a newer analysis. Please refresh the page.")
     if not body.consent:
         raise HTTPException(status_code=400, detail="Please confirm that your resume and answers may be sent to the AI service.")
+    _check_same_provider(body.provider)
 
     questions = {q["id"]: q["text"] for q in analysis.get("questions", [])}
     confirmed = []

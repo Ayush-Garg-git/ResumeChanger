@@ -25,7 +25,7 @@ class Settings:
 
     # Version of the API. Bump it when the API changes in a way the
     # frontend needs to know about.
-    api_version: str = "0.10.0"
+    api_version: str = "0.11.0"
 
     # Where the frontend runs in development. Only used if someone calls the
     # backend directly from the browser instead of through the Vite proxy.
@@ -50,8 +50,52 @@ class Settings:
     session_ttl_minutes: int = int(os.getenv("SESSION_TTL_MINUTES", "60"))
 
     # --- AI analysis (Milestone 3) ---
-    # The key comes ONLY from the environment: backend/.env locally,
-    # Render's Environment settings in production. Never commit it.
+    # Keys come ONLY from the environment: backend/.env locally, Render's
+    # Environment settings in production. Never commit them.
+
+    # Which AI to use: "claude", "gemini", or "auto" (the default). Auto
+    # uses Claude when ANTHROPIC_API_KEY is set, otherwise Gemini, so the
+    # site switches to Claude as soon as the key is added on Render.
+    ai_provider_setting: str = os.getenv("AI_PROVIDER", "auto").strip().lower()
+
+    # --- Claude (Anthropic API, paid from the company's API credits) ---
+    # Variable names start with CLAUDE_API_ on purpose: Claude's own tools
+    # set variables like CLAUDE_EFFORT on developer machines, and those
+    # must never change how this app behaves.
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    # Haiku is the fastest and cheapest Claude model; ample for this task.
+    claude_model: str = os.getenv("CLAUDE_API_MODEL", "claude-haiku-5-5")
+    # Tried if the main model is overloaded or over its rate limit.
+    # Set to "" to switch off.
+    claude_fallback_model: str = os.getenv("CLAUDE_API_FALLBACK_MODEL", "claude-sonnet-5-5")
+    # How much work Claude puts in (low, medium, high). Low is fastest and
+    # cheapest; our own checks catch the mistakes that matter.
+    claude_effort: str = os.getenv("CLAUDE_API_EFFORT", "low").strip().lower()
+    # A ceiling on one answer, thinking included. Billing is for tokens
+    # actually used, so a generous ceiling costs nothing extra.
+    claude_max_tokens: int = int(os.getenv("CLAUDE_API_MAX_TOKENS", "16000"))
+    # Only "true" if the company opts in to letting Anthropic train on API
+    # data. Shown in the privacy notice, so it must match the real terms.
+    claude_trains_on_data: bool = os.getenv("CLAUDE_API_TRAINS_ON_DATA", "false").strip().lower() == "true"
+
+    @property
+    def ai_provider(self) -> str:
+        if self.ai_provider_setting in ("claude", "gemini"):
+            return self.ai_provider_setting
+        return "claude" if self.anthropic_api_key else "gemini"
+
+    def problems(self) -> list[str]:
+        """Settings that look wrong, logged once at startup."""
+        found = []
+        if self.ai_provider_setting not in ("auto", "claude", "gemini"):
+            found.append(f"AI_PROVIDER={self.ai_provider_setting!r} is not auto, claude or gemini; using auto.")
+        if self.claude_effort not in ("low", "medium", "high", "xhigh", "max"):
+            found.append(f"CLAUDE_API_EFFORT={self.claude_effort!r} is not a valid effort level.")
+        if os.getenv("ANTHROPIC_CUSTOM_HEADERS"):
+            found.append("ANTHROPIC_CUSTOM_HEADERS is set; the Anthropic library adds those headers to every request.")
+        return found
+
+    # --- Gemini (Google) ---
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
 
     # Best model on the Gemini free tier as of October 2026. Change it here

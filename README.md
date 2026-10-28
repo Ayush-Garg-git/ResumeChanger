@@ -46,9 +46,16 @@ pytest
 
 ### AI key (Milestone 3)
 
-1. Create a key at https://aistudio.google.com ("Get API key").
-2. Put it in `backend/.env` as `GEMINI_API_KEY=...` (copied from `.env.example`). Never commit `.env`.
-3. For the live site: Render > resume-refiner > Environment > add `GEMINI_API_KEY`.
+The app works with **Claude** (Anthropic API, paid from the company's API credits) or **Gemini** (Google). With `AI_PROVIDER=auto` (the default) it uses Claude whenever `ANTHROPIC_API_KEY` is set, otherwise Gemini.
+
+**Claude (recommended):**
+1. In the Claude Console, use the `resume-refiner` workspace (it has its own spend limit) and create a key named for where it runs, e.g. `resume-refiner-prod-render`.
+2. Locally: put it in `backend/.env` as `ANTHROPIC_API_KEY=...`. Live site: Render > resume-refiner > Environment > `ANTHROPIC_API_KEY`. Never commit `.env`, never paste a key into chat or screenshots.
+3. Defaults: `claude-haiku-5-5` at low effort, backup `claude-sonnet-5-5`. Settings use the `CLAUDE_API_` prefix (see `.env.example`) so Claude's own developer tools, which set variables like `CLAUDE_EFFORT`, can't change the app. The app also always calls `https://api.anthropic.com` (ignoring any machine-wide `ANTHROPIC_BASE_URL`) and keeps the Anthropic library's logs at WARNING, so `ANTHROPIC_LOG=debug` can't write resume text to the logs. Suspicious settings (an unknown `AI_PROVIDER`, `ANTHROPIC_CUSTOM_HEADERS`) are logged as warnings at startup.
+4. **Consent follows the provider.** The page sends the provider named in the notice the user agreed to. If the site switched AI since the page loaded (a key added or removed), the request is refused with 409 and the user is asked to reload and read the new notice.
+5. If your own shell exports `ANTHROPIC_API_KEY` for other tools, the local app will use it too. Set `AI_PROVIDER=gemini` in `backend/.env` to prevent that.
+
+**Gemini:** create a key at https://aistudio.google.com and set `GEMINI_API_KEY` the same way.
 
 Without a key, the app still runs; the analyse button explains that AI isn't set up.
 Tests never call the real AI: they replace it with a stand-in.
@@ -80,7 +87,7 @@ To rebuild the sample after editing its script: `python -m samples.make_sample_r
 
 - **Uploads:** `.docx` only, 5 MB max, must be a real Word file, no macros, at most 5,000 paragraphs and 20 MB unzipped. Any request body over the limit is refused before it's saved.
 - **Storage:** each upload lives in its own temp folder as `original.docx` and is never modified. Everything is deleted when the user clicks Remove, or by a background job 60 minutes after the last action.
-- **AI:** nothing is sent until the user ticks a consent box that names the provider and tier. The top contact block and Personal Details, Declaration, Contact and References sections are never sent. The person's name, emails, phone and other long numbers, links, PAN and passport numbers, and date-of-birth lines are masked elsewhere. Masking is pattern-based and the notice says it can miss unusual formats.
+- **AI:** nothing is sent until the user ticks a consent box that names the provider, both models, and whether the provider may train on the data. The top contact block and Personal Details, Declaration, Contact and References sections are never sent. The person's name, emails, phone and other long numbers, links, PAN and passport numbers, and date-of-birth lines are masked elsewhere. Masking is pattern-based and the notice says it can miss unusual formats.
 - **Limits:** per network, per session and per day caps on AI analyses protect the free AI quota.
 - **Logs:** session IDs, counts and error types only. Never file names or resume text. Unexpected errors show a generic message.
 - **Browser:** security headers (content security policy, no framing, no sniffing, no referrer). The `/docs` API page is off in production.
@@ -111,9 +118,9 @@ Page counts in the preview are estimates (LibreOffice, not Word), and the app sa
 ## Deployment checklist
 
 1. Push to `main`. GitHub runs the tests (see the green tick), and Render builds the Docker image.
-2. In Render > Environment, set `GEMINI_API_KEY`. The other variables have defaults in `render.yaml` and `config.py`.
-3. After deploy, `/api/health` should show the new version, `"configured": true` and `"preview_available": true`.
-4. On a paid AI key, set `GEMINI_TIER=paid` so the privacy notice stays accurate, and consider raising the analysis limits.
+2. In Render > Environment, set `ANTHROPIC_API_KEY` (Claude) or `GEMINI_API_KEY` (Gemini). The other variables have defaults in `render.yaml` and `config.py`.
+3. After deploy, `/api/health` should show the new version, the provider you expect (`"Anthropic Claude"` or `"Google Gemini"`), `"configured": true` and `"preview_available": true`.
+4. With Gemini on a paid key, set `GEMINI_TIER=paid` so the privacy notice stays accurate. With Claude, the notice says Anthropic does not train on the data, which is true under its default API terms. If the company ever opts in to sharing API data with Anthropic, set `CLAUDE_API_TRAINS_ON_DATA=true` so the notice stays true.
 
 ## How the pieces connect
 
@@ -125,7 +132,9 @@ The Vite dev server forwards every `/api/...` request to FastAPI (see `frontend/
 
 **Slow AI steps run as background jobs.** `POST .../analyze` and `POST .../answers` do their quick checks, then return `202` with a `job_id` straight away. The page checks `GET .../jobs/{job_id}` every 2 seconds until the job is `done` or `failed`. A check that fails because the connection dropped (a phone locking or switching networks) is simply retried; the result waits on the server (`app/jobs.py`).
 
-**Backup model.** If the main model (`GEMINI_MODEL`) is busy or over its free limit, the next attempt goes to `GEMINI_FALLBACK_MODEL` (default `gemini-3.5-flash-lite`), which Google runs separately. The privacy notice names both models. Set `GEMINI_FALLBACK_MODEL=` (empty) to switch it off. Render logs show which model answered: `AI answered in 12.3s (attempt 2, gemini-3.5-flash-lite)`.
+**Backup model.** If the main model is busy (5xx, Claude's 529 "overloaded") or over its rate limit (429), the next attempt goes to the backup model of the same provider: `CLAUDE_API_FALLBACK_MODEL` (default `claude-sonnet-5-5`) or `GEMINI_FALLBACK_MODEL` (default `gemini-3.5-flash-lite`). Each model has its own capacity and limits. The privacy notice names both models. Set the variable to empty to switch it off. Render logs show which model answered: `AI answered in 3.2s (attempt 2, claude-sonnet-5-5)`.
+
+**Out of credit.** When the monthly API credit or a spend limit runs out, Anthropic refuses every model on the account, so the app does not retry. Users see "This site has used up its AI allowance for now", and Render logs show `OUT OF CREDIT: check the API credit balance and spend limits`.
 
 ## Production and deployment
 
@@ -154,8 +163,8 @@ backend/
   app/validation.py    upload checks (type, size, real DOCX, no macros)
   app/storage.py       temp session folders and automatic cleanup
   app/docx_reader.py   paragraphs in reading order, with IDs and sections
-  app/schemas.py       shape of the AI's answer (also sent to Gemini as its schema)
-  app/analyzer.py      prompt, privacy masking, the Gemini call (only file that knows the provider)
+  app/schemas.py       shape of the AI's answer (also sent to the AI as its schema)
+  app/analyzer.py      prompt, privacy masking, the Claude and Gemini calls (only file that knows the providers)
   app/suggestion_checks.py  safety net that drops invented or unsafe suggestions
   app/decisions.py     accept / reject / edit rules and the summary of what will change
   app/docx_editor.py   writes approved changes into a copy, run by run, keeping formatting

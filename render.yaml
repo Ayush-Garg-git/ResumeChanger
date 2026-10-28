@@ -12,6 +12,9 @@ services:
     envVars:
       # Secret: set its value in Render > resume-refiner > Environment.
       # `sync: false` means the value is never stored in this file.
+      # With ANTHROPIC_API_KEY set, the site uses Claude; otherwise Gemini.
+      - key: ANTHROPIC_API_KEY
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL

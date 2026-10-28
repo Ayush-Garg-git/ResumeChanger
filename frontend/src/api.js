@@ -130,10 +130,13 @@ async function runJob(sessionId, startPath, body) {
   }
 }
 
-export function analyzeResume(sessionId, jobDescription, consent) {
+// `provider`: the AI named in the notice the user agreed to. The server
+// refuses if the site has since switched to a different AI.
+export function analyzeResume(sessionId, jobDescription, consent, provider) {
   return runJob(sessionId, `/api/resume/${sessionId}/analyze`, {
     job_description: jobDescription,
     consent,
+    provider,
   });
 }
 
@@ -148,11 +151,12 @@ export function decideSuggestion(sessionId, analysisId, suggestionId, action, te
 }
 
 // answers: [{ question_id, has_it, details }]. Only Yes answers are used.
-export function submitAnswers(sessionId, analysisId, answers, consent) {
+export function submitAnswers(sessionId, analysisId, answers, consent, provider) {
   return runJob(sessionId, `/api/resume/${sessionId}/answers`, {
     analysis_id: analysisId,
     answers,
     consent,
+    provider,
   });
 }
 

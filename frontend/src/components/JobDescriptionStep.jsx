@@ -23,7 +23,7 @@ export default function JobDescriptionStep({ sessionId, ai, onAnalysed }) {
     setError("");
     setBusy(true);
     try {
-      onAnalysed(await analyzeResume(sessionId, text, consent));
+      onAnalysed(await analyzeResume(sessionId, text, consent, ai?.provider));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -51,8 +51,8 @@ export default function JobDescriptionStep({ sessionId, ai, onAnalysed }) {
 
         {ai && !ai.configured && (
           <p className="message message-warn">
-            AI analysis isn't set up on this server yet. The site owner needs to add a
-            Gemini API key.
+            AI analysis isn't set up on this server yet. The site owner needs to add an
+            AI API key.
           </p>
         )}
 
@@ -67,13 +67,13 @@ export default function JobDescriptionStep({ sessionId, ai, onAnalysed }) {
               emails, phone numbers, links and ID numbers we recognise. Automatic masking
               can miss unusual formats, so only continue if you're comfortable with the
               rest of your resume being sent.
-              {ai.tier === "free" ? (
+              {ai.trains_on_data ? (
                 <>
-                  {" "}This site uses Google's <strong>free tier</strong>, where Google may
-                  use the content to improve its products.
+                  {" "}This site uses {ai.provider}'s <strong>free tier</strong>, where the
+                  provider may use the content to improve its products.
                 </>
               ) : (
-                <> On the paid tier, Google does not use it to improve its products.</>
+                <> Under its API terms, {ai.provider} does not use it to train AI models.</>
               )}
             </p>
             <label className="consent-check">
@@ -99,7 +99,7 @@ export default function JobDescriptionStep({ sessionId, ai, onAnalysed }) {
         </button>
         {busy && elapsed >= 30 && (
           <p className="muted small slow-note">
-            Google Gemini is slow right now. It's fine to switch apps or lock your
+            The AI is slow right now. It's fine to switch apps or lock your
             phone: the analysis keeps running and will be here when you come back.
           </p>
         )}
