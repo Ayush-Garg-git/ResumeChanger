@@ -17,6 +17,12 @@ What we check (each maps to a rule in the project brief):
 - It doesn't upgrade the wording to sound more senior,
   e.g. "Helped" -> "Led".                                     (rule 2: no inflating)
 - "shorten" really is shorter.                                (rule 3: smallest change)
+- "tailor"/"reword" keep every number the line had: a result
+  (40%, 20+ members) is never quietly dropped.                (keep achievements)
+- "remove_items" only deletes whole items from a list line,
+  e.g. "Tools: Git, WordPress, Excel" -> "Tools: Git, Excel". (nothing else changes)
+- Section tips don't suggest adding things the resume
+  doesn't show.                                               (rule 1: never invent)
 - It doesn't add line breaks that would change the layout.    (rule 8)
 
 These are word-based checks, so they catch common cases, not every
@@ -33,7 +39,9 @@ from app.analyzer import PLACEHOLDERS, redact
 from app.docx_reader import ResumeParagraph
 from app.schemas import ResumeAnalysis, Suggestion
 
-REWRITE_KINDS = {"shorten", "reword", "emphasise"}
+REWRITE_KINDS = {"tailor", "reword", "shorten", "emphasise", "remove_items"}
+# Kinds that must keep every number (result) the original line had.
+KEEP_NUMBER_KINDS = {"tailor", "reword", "emphasise", "remove_items"}
 
 
 @dataclass
@@ -101,6 +109,59 @@ def special_terms(text: str) -> set[str]:
 job_terms = special_terms
 
 
+# Irregular past forms, so "built" in a resume covers "build" in a job ad.
+_IRREGULAR = {
+    "built": "build", "wrote": "write", "written": "write", "ran": "run", "made": "make",
+    "taught": "teach", "brought": "bring", "sold": "sell", "bought": "buy", "kept": "keep",
+    "gave": "give", "given": "give", "took": "take", "taken": "take", "held": "hold",
+    "met": "meet", "thought": "think", "spent": "spend", "sent": "send", "found": "find",
+    "grew": "grow", "grown": "grow", "began": "begin", "begun": "begin", "chose": "choose",
+    "chosen": "choose", "drew": "draw", "drawn": "draw", "won": "win", "shown": "show",
+    "knew": "know", "known": "know", "spoke": "speak", "spoken": "speak", "understood": "understand",
+}
+
+
+def word_form(word: str) -> tuple[str, str]:
+    """
+    ("verb", root) for -ed / -ing / irregular past forms, ("noun", root)
+    for everything else, with plurals reduced: "dashboards" -> ("noun",
+    "dashboard"), "built" and "building" -> ("verb", "build").
+
+    The KIND matters. A verb form never matches a plain word, so "excelled"
+    in a resume can't vouch for the tool "Excel", "reacted" for "React",
+    "marketing" for "market", or a date's "Present" for "presented".
+    Only for deciding whether the resume already uses a word.
+    """
+    w = word.casefold()
+    if w in _IRREGULAR:
+        return "verb", _IRREGULAR[w].rstrip("e")  # same shape as "writing" -> "writ"
+    for suffix in ("ing", "ed"):
+        root = w[: -len(suffix)]
+        if w.endswith(suffix) and len(root) >= 3 and not w.endswith("eed"):
+            if root[-1] == root[-2] and root[-1] not in "aeiouls":
+                root = root[:-1]  # "debugging" -> "debug", "planned" -> "plan"
+            return "verb", root.rstrip("e")
+    if w.endswith("ies") and len(w) >= 5:
+        return "noun", w[:-3] + "y"
+    if w.endswith(("ses", "xes", "ches", "shes", "zes")) and len(w) >= 5:
+        return "noun", w[:-2]
+    if w.endswith("s") and not w.endswith(("ss", "us", "sis")) and len(w) >= 4:
+        return "noun", w[:-1]
+    return "noun", w
+
+
+def _root(word: str) -> str:
+    """Root regardless of kind: for the job-description side, where being
+    generous means catching MORE words, which is the safe direction."""
+    return word_form(word)[1]
+
+
+def _new_words(proposed: str, resume_tokens: set[str]) -> set[str]:
+    """Words in the proposal that the resume doesn't already use in any form of the same kind."""
+    resume_forms = {word_form(t) for t in resume_tokens}
+    return {t for t in _tokens(proposed) - resume_tokens if word_form(t) not in resume_forms}
+
+
 def invented_terms(proposed: str, resume_tokens: set[str], job_description: str) -> list[str]:
     """
     Words the proposal adds that the resume never mentions, and that look
@@ -109,7 +170,7 @@ def invented_terms(proposed: str, resume_tokens: set[str], job_description: str)
     - the word looks tool-like in the proposal itself (capitalised
       mid-sentence, acronym, digits/symbols), e.g. "...with Python and Tableau".
     """
-    new_words = _tokens(proposed) - resume_tokens
+    new_words = _new_words(proposed, resume_tokens)
     suspicious = (new_words & special_terms(job_description)) | (new_words & special_terms(proposed))
     return sorted(suspicious)
 
@@ -131,10 +192,28 @@ across into onto team teams people user users
 # Verbs that claim more seniority or ownership than plainer wording.
 # A proposal may keep one the original line already used, but not add one.
 INFLATION_WORDS = {
-    "led", "lead", "leading", "spearheaded", "spearheading", "headed", "directed", "owned",
-    "architected", "pioneered", "championed", "orchestrated", "drove", "founded",
-    "managed", "oversaw", "supervised", "expert", "mastered",
+    "led", "lead", "leads", "leading", "spearhead", "spearheads", "spearheaded", "spearheading",
+    "headed", "heads", "heading", "direct", "directs", "directed", "directing",
+    "own", "owns", "owned", "owning", "architected", "architecting", "pioneered", "pioneering",
+    "championed", "championing", "orchestrated", "orchestrating", "drove", "drives", "driving",
+    "founded", "founding", "manage", "manages", "managed", "managing", "oversee", "oversees",
+    "oversaw", "overseeing", "supervise", "supervises", "supervised", "supervising",
+    "expert", "experts", "mastered", "mastering",
 }
+
+# Words that say someone else shared or led the work. Dropping one would
+# change who did the work ("Assisted engineers in designing" -> "Designed").
+SHARED_CREDIT_WORDS = {
+    "assist", "assists", "assisted", "assisting", "helped", "helping", "supported", "supporting",
+    "contributed", "contributing", "participated", "participating", "involved", "shadowed",
+    "shadowing", "supervision", "guidance", "co-founded", "co-authored", "jointly",
+}
+
+
+def dropped_shared_credit(original: str, proposed: str) -> list[str]:
+    """Shared-credit words the original line had and the proposal drops."""
+    words = lambda t: {w.casefold() for w in re.findall(r"[A-Za-z][A-Za-z-]*", t)}  # noqa: E731
+    return sorted((words(original) & SHARED_CREDIT_WORDS) - words(proposed))
 
 
 def invented_words(proposed: str, resume_tokens: set[str], job_description: str) -> list[str]:
@@ -143,9 +222,11 @@ def invented_words(proposed: str, resume_tokens: set[str], job_description: str)
     that appear in the job description, and that the resume never uses,
     whatever their capitalisation. E.g. "machine", "learning".
     """
-    new_words = _tokens(proposed) - resume_tokens
-    jd_words = _tokens(job_description)
-    return sorted(w for w in new_words & jd_words if len(w) >= 3 and w not in _PLAIN_WORDS)
+    new_words = _new_words(proposed, resume_tokens)
+    jd_roots = {_root(t) for t in _tokens(job_description)}
+    return sorted(
+        w for w in new_words if _root(w) in jd_roots and len(w) >= 3 and w not in _PLAIN_WORDS
+    )
 
 
 def inflated_words(original: str, proposed: str) -> list[str]:
@@ -162,6 +243,76 @@ def same_words(a: str, b: str) -> bool:
     """True if both texts use exactly the same words, in any order."""
     words = lambda t: Counter(re.findall(r"[\w+#.]+", t.casefold()))  # noqa: E731
     return words(a) == words(b)
+
+
+def _split_top_level(text: str) -> list[str]:
+    """Split on , ; | but not inside brackets: "Linux (CLI, config)" is one item."""
+    items, depth, current = [], 0, []
+    for ch in text:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        if ch in ",;|" and depth == 0:
+            items.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    items.append("".join(current))
+    return [i.strip() for i in items if i.strip()]
+
+
+def _label_and_items(text: str) -> tuple[str, list[str]]:
+    """"Tools: Git, GitHub, VS Code" -> ("tools", ["git", "github", "vs code"])."""
+    label, rest = "", text
+    colon = text.find(":")
+    if 0 < colon <= 40:
+        label, rest = text[:colon], text[colon + 1:]
+    items = _split_top_level(rest.strip().rstrip("."))
+    return _squash(label), [_squash(i) for i in items]
+
+
+MAX_WORDS_PER_ITEM = 6
+# A "list item" starting with one of these is really part of a sentence:
+# "Wrote tests in Python, under supervision, for the billing team".
+_CLAUSE_STARTERS = {
+    "under", "for", "with", "in", "to", "by", "at", "of", "on", "from", "including", "which",
+    "that", "while", "and", "but", "so", "reducing", "cutting", "improving", "increasing",
+}
+
+
+def removal_problem(original: str, proposed: str) -> str | None:
+    """
+    Why a remove_items proposal is not a pure removal of list items, or None.
+    Only plain lists qualify: one label at most, short items. A sentence
+    with commas ("Wrote tests in Python, under supervision") or a line with
+    two labels ("Proficient: Python | Beginner: Java") is not a list, and
+    removing a piece of it could change its meaning.
+    """
+    label, items = _label_and_items(original)
+    new_label, new_items = _label_and_items(proposed)
+    if (
+        len(items) < 2
+        or any(":" in item for item in items)
+        or any(len(item.split()) > MAX_WORDS_PER_ITEM for item in items)
+        or any(item.split()[0] in _CLAUSE_STARTERS for item in items[1:])
+    ):
+        return "It was marked 'remove items' but the line isn't a simple list."
+    if new_label != label:
+        return "It was marked 'remove items' but changed the start of the line."
+    if not new_items:
+        return "It would have removed every item; use 'consider removing' for that."
+    remaining = iter(items)  # kept items must appear in the original order
+    if not all(item in remaining for item in new_items):
+        return "It was marked 'remove items' but changed or added words."
+    if len(new_items) >= len(items):
+        return "It was marked 'remove items' but removed nothing."
+    removed = list(items)
+    for item in new_items:
+        removed.remove(item)
+    if any(re.search(r"\d", item) for item in removed):
+        return "It would have removed an item with a number in it, which may be a result."
+    return None
 
 
 def check_suggestions(
@@ -215,6 +366,15 @@ def check_suggestions(
             if any(ph in proposed for ph in PLACEHOLDERS):
                 drop(s, "It would have inserted a placeholder into your resume.")
                 continue
+            if s.kind == "remove_items":
+                problem = (
+                    "Removing items is only offered for skills lists."
+                    if para.section != "Skills"
+                    else removal_problem(original, proposed)
+                )
+                if problem:
+                    drop(s, problem)
+                    continue
             new_numbers = _numbers(proposed) - _numbers(original)
             if new_numbers:
                 drop(s, f"It added a number that isn't in the original line ({', '.join(sorted(new_numbers))}).")
@@ -236,12 +396,20 @@ def check_suggestions(
                     "but nowhere in your resume.",
                 )
                 continue
+            shared = dropped_shared_credit(original, proposed)
+            if shared:
+                drop(s, f"It removed '{shared[0]}', which would change who did the work.")
+                continue
             inflated = inflated_words(original, proposed)
             if inflated:
                 drop(s, f"It changed the wording to '{inflated[0]}', which claims more than the original line says.")
                 continue
             if s.kind == "shorten" and len(proposed) >= len(original):
                 drop(s, "It was marked 'shorten' but wasn't shorter.")
+                continue
+            lost_numbers = _numbers(original) - _numbers(proposed)
+            if s.kind in KEEP_NUMBER_KINDS and lost_numbers:
+                drop(s, f"It dropped a result from the line ({', '.join(sorted(lost_numbers))}).")
                 continue
             if s.kind == "emphasise" and not same_words(original, proposed):
                 # "Emphasise" promises the same words in a new order. If words
@@ -255,6 +423,50 @@ def check_suggestions(
         kept.append(s)
 
     return kept, dropped
+
+
+def check_section_reviews(
+    analysis: ResumeAnalysis,
+    sent_paragraphs: list[ResumeParagraph],
+    job_description: str,
+    name_words: list[str] | None = None,
+) -> list[dict]:
+    """
+    Keep one review per real section, in resume order. Tips are advice
+    only (never applied), but a tip that suggests adding something the
+    resume doesn't show is still dropped: that belongs in a question.
+    """
+    from app.schemas import MAX_TIPS_PER_SECTION
+
+    order = []
+    for p in sent_paragraphs:
+        if p.section not in order:
+            order.append(p.section)
+    by_name = {_squash(name): name for name in order}
+    resume_tokens = _tokens(" ".join(redact(p.text, name_words) for p in sent_paragraphs))
+
+    reviews: dict[str, dict] = {}
+    for r in analysis.section_reviews:
+        name = by_name.get(_squash(r.section))
+        if name is None or name in reviews:
+            continue
+        tips = []
+        for tip in r.tips:
+            tip = tidy_proposal(tip)
+            if not tip or any(ph in tip for ph in PLACEHOLDERS):
+                continue
+            if invented_terms(tip, resume_tokens, job_description):
+                continue
+            if invented_words(tip, resume_tokens, job_description):
+                continue
+            tips.append(tip)
+        reviews[name] = {
+            "section": name,
+            "relevance": r.relevance,
+            "verdict": tidy_proposal(r.verdict),
+            "tips": tips[:MAX_TIPS_PER_SECTION],
+        }
+    return [reviews[name] for name in order if name in reviews]
 
 
 def clean_evidence(analysis: ResumeAnalysis, sent_paragraphs: list[ResumeParagraph]) -> ResumeAnalysis:

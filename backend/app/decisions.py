@@ -9,7 +9,8 @@ the original". Milestone 5 will apply only decisions whose effect is
 Which actions each kind of suggestion allows:
 
     kind                       accept means        edit   reject
-    shorten/reword/emphasise   use proposed text    yes    keep original
+    tailor/reword/shorten/
+    emphasise/remove_items     use proposed text    yes    keep original
     consider_removing          remove the line      yes    keep original
     review                     (not allowed)        yes    keep original
 
@@ -19,7 +20,7 @@ Decisions are saved in the session folder as decisions.json:
 
 import re
 
-REWRITE_KINDS = {"shorten", "reword", "emphasise", "add_confirmed"}
+REWRITE_KINDS = {"tailor", "reword", "shorten", "emphasise", "remove_items", "add_confirmed"}
 
 # Longest edit we accept, in characters. A resume paragraph is short.
 MAX_EDIT_CHARS = 1000

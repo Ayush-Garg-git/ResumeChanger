@@ -14,6 +14,7 @@ Tailors an existing DOCX resume to a job description. The AI suggests changes, t
 | 4b | Answer questions to add confirmed skills | Done |
 | 6 | Before/after preview and page limits | Done |
 | 7 | Testing, error handling, privacy, deployment | Done |
+| 8 | Whole-resume tailoring: every section reviewed, tailored bullets, remove individual skills, ATS check | Done |
 
 ## Requirements
 
@@ -99,7 +100,10 @@ The AI is *told* the rules (`analyzer.py`), but the code also *checks* them, bec
 
 | Rule in the brief | Where it's enforced | Tested in |
 |---|---|---|
-| Never invent skills, projects, achievements | `suggestion_checks.py` drops proposals that add numbers, tool-like terms, or job-description words the resume never uses | `test_suggestion_checks.py`, `test_hardening.py` (7) |
+| Never invent skills, projects, achievements | `suggestion_checks.py` drops proposals that add numbers, tool-like terms, or job-description words the resume never uses (word forms count as the same word: "dashboards"/"dashboard", "built"/"build") | `test_suggestion_checks.py`, `test_hardening.py` (7), `test_whole_resume.py` |
+| Keep results when tailoring | "tailor", "reword" and "emphasise" may not drop a number the line had (only "shorten" may) | `test_whole_resume.py` |
+| Remove skills only with approval | "remove_items" may only delete whole items from a list line, in order, label unchanged; applied only on "Remove these" | `test_whole_resume.py` |
+| Section advice never invents | Section tips that mention skills or job claims the resume doesn't show are dropped; tips are never applied | `test_whole_resume.py` |
 | Don't make content sound more impressive | `suggestion_checks.py` drops proposals that add words like "led", "spearheaded", "owned" | `test_hardening.py` (7) |
 | Smallest useful change | "shorten" must be shorter; "emphasise" must only reorder; edits touch only the changed runs | `test_suggestion_checks.py`, `test_docx_editor.py` |
 | Never remove content without approval | Removal happens only on an explicit "Remove line" click; undecided = unchanged | `test_decisions.py` |
@@ -121,6 +125,19 @@ Page counts in the preview are estimates (LibreOffice, not Word), and the app sa
 2. In Render > Environment, set `ANTHROPIC_API_KEY` (Claude) or `GEMINI_API_KEY` (Gemini). The other variables have defaults in `render.yaml` and `config.py`.
 3. After deploy, `/api/health` should show the new version, the provider you expect (`"Anthropic Claude"` or `"Google Gemini"`), `"configured": true` and `"preview_available": true`.
 4. With Gemini on a paid key, set `GEMINI_TIER=paid` so the privacy notice stays accurate. With Claude, the notice says Anthropic does not train on the data, which is true under its default API terms. If the company ever opts in to sharing API data with Anthropic, set `CLAUDE_API_TRAINS_ON_DATA=true` so the notice stays true.
+
+## Whole-resume tailoring (Milestone 8)
+
+The analysis now works section by section. For every section the page shows how relevant it is to the job, a one-line verdict, advice that is never applied automatically (e.g. "move Projects above Leadership"), and its suggested changes. Change kinds:
+
+| Kind | What it does |
+|---|---|
+| Tailor to job | Rewrites a line so the responsibilities, results and transferable skills this job values come first, using only facts in the resume |
+| Reword / Shorten / Emphasise | Clearer wording / fewer words / same words reordered |
+| Remove items | Deletes some items from a list line, e.g. skills that add little for this job |
+| Consider removing / Review | Whole line, or flag for the user to look at |
+
+**ATS check** (`app/ats.py`, no AI): which tool-like keywords from the job already appear in the resume and which don't (missing ones are never added), plus layout that applicant tracking systems often misread: tables, text boxes, multiple columns, contact details only in the page header, unusual section headings. There is deliberately no percentage "ATS score": we can't back one up.
 
 ## How the pieces connect
 
@@ -165,7 +182,8 @@ backend/
   app/docx_reader.py   paragraphs in reading order, with IDs and sections
   app/schemas.py       shape of the AI's answer (also sent to the AI as its schema)
   app/analyzer.py      prompt, privacy masking, the Claude and Gemini calls (only file that knows the providers)
-  app/suggestion_checks.py  safety net that drops invented or unsafe suggestions
+  app/suggestion_checks.py  safety net that drops invented or unsafe suggestions and section tips
+  app/ats.py           ATS check: job keyword coverage and layout risks (no AI)
   app/decisions.py     accept / reject / edit rules and the summary of what will change
   app/docx_editor.py   writes approved changes into a copy, run by run, keeping formatting
   app/validator.py     reopens both files and checks only approved text changed

@@ -55,7 +55,8 @@ from app.docx_reader import read_resume
 from app.limits import BodySizeLimitMiddleware, check_analysis_allowed, check_upload_allowed
 from app.page_fit import page_fit
 from app.schemas import AnalyzeRequest, AnswersRequest, DecisionRequest
-from app.suggestion_checks import check_suggestions, clean_evidence
+from app.ats import ats_report
+from app.suggestion_checks import check_section_reviews, check_suggestions, clean_evidence
 from app.validation import UploadError, validate_docx_upload
 from app.validator import validate
 
@@ -336,13 +337,23 @@ def analyze_resume(request: Request, session_id: str, body: AnalyzeRequest) -> d
 
     check_analysis_allowed(request, session_id)
     storage.touch_session(session_id)
+    # Done here, on our own server, with no AI: quick and deterministic.
+    ats = ats_report(original, outline, job_description)
     job_id = jobs.start(
-        session_id, "analysis", lambda: _run_analysis(session_id, outline, sent, job_description)
+        session_id, "analysis", lambda: _run_analysis(session_id, outline, sent, job_description, ats)
     )
     return {"job_id": job_id, "status": "running"}
 
 
-def _run_analysis(session_id: str, outline, sent, job_description: str) -> dict:
+def _sections(sent) -> list[dict]:
+    """The sections we analysed, in resume order, with their paragraph IDs."""
+    sections: dict[str, list[str]] = {}
+    for p in sent:
+        sections.setdefault(p.section, []).append(p.id)
+    return [{"name": name, "paragraph_ids": ids} for name, ids in sections.items()]
+
+
+def _run_analysis(session_id: str, outline, sent, job_description: str, ats: dict) -> dict:
     """The slow part of an analysis. Runs as a background job."""
     # The AI call happens WITHOUT the lock: the user can still remove their
     # resume meanwhile.
@@ -351,7 +362,9 @@ def _run_analysis(session_id: str, outline, sent, job_description: str) -> dict:
     except AIError as err:
         raise HTTPException(status_code=err.status_code, detail=err.message)
 
-    suggestions, dropped = check_suggestions(analysis, sent, job_description, person_name_words(outline))
+    name_words = person_name_words(outline)
+    suggestions, dropped = check_suggestions(analysis, sent, job_description, name_words)
+    section_reviews = check_section_reviews(analysis, sent, job_description, name_words)
     analysis = clean_evidence(analysis, sent)
 
     result = {
@@ -367,6 +380,11 @@ def _run_analysis(session_id: str, outline, sent, job_description: str) -> dict:
         # IDs so the user can answer each question (Milestone 4b).
         "questions": [{"id": f"q{i + 1}", "text": q} for i, q in enumerate(analysis.questions_for_user)],
         "no_changes_needed": analysis.no_changes_needed and not suggestions,
+        # Whole-resume view: every section we analysed, the AI's review of
+        # each (relevance, verdict, advice-only tips) and the ATS check.
+        "sections": _sections(sent),
+        "section_reviews": section_reviews,
+        "ats": ats,
         "model": last_model_used(),
     }
 
@@ -377,8 +395,8 @@ def _run_analysis(session_id: str, outline, sent, job_description: str) -> dict:
         storage.clear_refined(session_id)
 
     logger.info(
-        "Session %s analysed: %d suggestions kept, %d dropped, %d questions",
-        session_id, len(suggestions), len(dropped), len(analysis.questions_for_user),
+        "Session %s analysed: %d suggestions kept, %d dropped, %d questions, %d sections reviewed",
+        session_id, len(suggestions), len(dropped), len(analysis.questions_for_user), len(section_reviews),
     )
     return result
 

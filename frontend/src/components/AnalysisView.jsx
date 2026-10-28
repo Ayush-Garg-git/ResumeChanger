@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { decideSuggestion } from "../api.js";
-import SuggestionCard from "./SuggestionCard.jsx";
+import SectionBlock from "./SectionBlock.jsx";
+import AtsPanel from "./AtsPanel.jsx";
 import DecisionSummary from "./DecisionSummary.jsx";
 import QuestionsPanel from "./QuestionsPanel.jsx";
 
@@ -23,6 +24,21 @@ export default function AnalysisView({ sessionId, fileName, analysis, ai, onAnal
   // While "Create refined resume" runs, the cards are locked, so a click
   // can't change a decision halfway through creating the file.
   const [creating, setCreating] = useState(false);
+
+  // Every analysed section in resume order, each with its review and its
+  // suggestions. Older saved analyses have no sections: one plain group.
+  const sections = analysis.sections ?? [{ name: "Suggested changes", paragraph_ids: null }];
+  const reviews = Object.fromEntries((analysis.section_reviews ?? []).map((r) => [r.section, r]));
+  const sectionOf = {};
+  sections.forEach((sec) => (sec.paragraph_ids ?? []).forEach((pid) => (sectionOf[pid] = sec.name)));
+  const groups = sections.map((sec) => ({
+    ...sec,
+    suggestions: suggestions.filter((s) =>
+      sec.paragraph_ids === null ? true : sectionOf[s.paragraph_id] === sec.name
+    ),
+  }));
+  const ungrouped = analysis.sections ? suggestions.filter((s) => !sectionOf[s.paragraph_id]) : [];
+  if (ungrouped.length > 0) groups.push({ name: "Other changes", key: "__ungrouped", paragraph_ids: [], suggestions: ungrouped });
 
   async function decide(suggestionId, action, text) {
     // The server checks the decision first; we only update the screen
@@ -102,20 +118,28 @@ export default function AnalysisView({ sessionId, fileName, analysis, ai, onAnal
         </details>
       )}
 
-      {suggestions.length > 0 && (
+      <AtsPanel ats={analysis.ats} />
+
+      {(suggestions.length > 0 || analysis.sections) && (
         <>
-          <h3 className="block-title">Suggested changes ({suggestions.length})</h3>
-          <ul className="suggestion-list">
-            {suggestions.map((s) => (
-              <SuggestionCard
-                key={s.id}
-                s={s}
-                decision={decisions[s.id]}
-                onDecide={decide}
-                locked={creating}
-              />
-            ))}
-          </ul>
+          <h3 className="block-title">
+            Section by section ({suggestions.length} suggested change{suggestions.length === 1 ? "" : "s"})
+          </h3>
+          <p className="muted small">
+            Every change uses only facts already in your resume. Accept, edit or reject each
+            one; nothing changes in your file unless you accept it.
+          </p>
+          {groups.map((g) => (
+            <SectionBlock
+              key={g.key ?? g.name}
+              name={g.name}
+              review={reviews[g.name]}
+              suggestions={g.suggestions}
+              decisions={decisions}
+              onDecide={decide}
+              locked={creating}
+            />
+          ))}
         </>
       )}
 

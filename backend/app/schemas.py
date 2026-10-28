@@ -22,31 +22,46 @@ from pydantic import BaseModel, Field
 # Caps on how much the AI writes. A screen of suggestions is plenty, and
 # every extra item adds seconds to the wait.
 MAX_REQUIREMENTS = 10
-MAX_SUGGESTIONS = 8
+# Whole-resume tailoring: enough for a few changes in every section.
+MAX_SUGGESTIONS = 16
 MAX_QUESTIONS = 5
+MAX_SECTION_REVIEWS = 12
+MAX_TIPS_PER_SECTION = 2
 
 
 class Requirement(BaseModel):
     requirement: str = Field(
         description="One requirement from the job description, in a few words."
     )
-    importance: Literal["must_have", "nice_to_have"]
+    importance: Literal["must_have", "nice_to_have"] = Field(
+        description="must_have if the job lists it under required skills, must-haves, "
+        "eligibility or core responsibilities; nice_to_have only if the job marks it as "
+        "a plus, preferred or nice to have."
+    )
     evidence: list[str] = Field(
         description="IDs of resume paragraphs that support this requirement, "
         "e.g. ['p10', 'p13']. Empty list if the resume does not support it."
     )
     coverage: Literal["clear", "partial", "missing"] = Field(
-        description="How well the resume, as written, shows this requirement."
+        description="How well the resume, as written, shows this requirement. A tool the "
+        "resume shows that is a well-known form of the required one counts as evidence "
+        "(e.g. Next.js work shows React)."
     )
 
 
 class Suggestion(BaseModel):
     paragraph_id: str = Field(description="ID of the ONE paragraph this is about, e.g. 'p10'.")
-    kind: Literal["shorten", "reword", "emphasise", "consider_removing", "review"] = Field(
-        description="shorten: same meaning, fewer words. "
-        "reword: small wording change to make existing relevant content clearer. "
-        "emphasise: reorder words in the line so relevant existing items come first. "
-        "consider_removing: the line may be less relevant to this role. "
+    kind: Literal[
+        "tailor", "reword", "shorten", "emphasise", "remove_items", "consider_removing", "review"
+    ] = Field(
+        description="tailor: rewrite the line so the responsibilities, results and transferable "
+        "skills that matter for this job come first, using only facts already in the resume. "
+        "reword: clearer or more direct wording, same facts. "
+        "shorten: same meaning, fewer words. "
+        "emphasise: same words, reordered so the relevant items come first. "
+        "remove_items: delete some items from a list line (e.g. skills that add little for this "
+        "job); proposed_text is the same line with those items left out and nothing else changed. "
+        "consider_removing: the whole line is clearly unrelated to this role. "
         "review: the user should look at this line; no rewrite offered."
     )
     # Only the opening words: enough for us to check the AI means the right
@@ -55,8 +70,8 @@ class Suggestion(BaseModel):
         description="The FIRST FIVE WORDS of the paragraph, copied exactly. Not the whole paragraph."
     )
     proposed_text: Optional[str] = Field(
-        description="The full replacement text for shorten, reword and emphasise. "
-        "null for consider_removing and review."
+        description="The full replacement text for tailor, reword, shorten, emphasise and "
+        "remove_items. null for consider_removing and review."
     )
     reason: str = Field(description="One short plain sentence: why this helps for this job.")
     requirement: Optional[str] = Field(
@@ -64,8 +79,32 @@ class Suggestion(BaseModel):
     )
 
 
+class SectionReview(BaseModel):
+    section: str = Field(
+        description="The section name exactly as given in square brackets in the resume, e.g. 'Experience'."
+    )
+    relevance: Literal["high", "medium", "low"] = Field(
+        description="How much this section, as written, matters for this job."
+    )
+    verdict: str = Field(description="One short plain sentence on this section for this job.")
+    tips: list[str] = Field(
+        description="Up to 2 short, specific tips for this section that are NOT line edits, e.g. "
+        "'Move this section above Community & Leadership'. Never suggest adding skills, tools, "
+        "numbers or experience the resume doesn't show; ask in questions_for_user instead. "
+        "Empty list if none.",
+        json_schema_extra={"maxItems": MAX_TIPS_PER_SECTION},
+    )
+
+
 class ResumeAnalysis(BaseModel):
     role_title: str = Field(description="The job title from the job description.")
+    # default_factory: older saved answers and test stand-ins may lack it.
+    # The schema sent to the AI still requires it (analyzer.require_all).
+    section_reviews: list[SectionReview] = Field(
+        default_factory=list,
+        description="One review for EVERY section of the resume, in resume order.",
+        json_schema_extra={"maxItems": MAX_SECTION_REVIEWS},
+    )
     fit_summary: str = Field(
         description="Two short neutral sentences on how the resume matches the job."
     )
@@ -77,7 +116,8 @@ class ResumeAnalysis(BaseModel):
         json_schema_extra={"maxItems": MAX_REQUIREMENTS},
     )
     suggestions: list[Suggestion] = Field(
-        description=f"Only changes worth making, at most {MAX_SUGGESTIONS}. An empty list is a valid answer.",
+        description=f"Changes worth making across ALL sections, at most {MAX_SUGGESTIONS}, "
+        "in resume order. An empty list is a valid answer.",
         json_schema_extra={"maxItems": MAX_SUGGESTIONS},
     )
     questions_for_user: list[str] = Field(

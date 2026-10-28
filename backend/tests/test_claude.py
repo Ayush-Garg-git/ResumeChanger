@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from tests.helpers import ai_post
 
 from app import analyzer
-from app.analyzer import AIError, claude_schema, provider_info
+from app.analyzer import AIError, claude_schema, provider_info, require_all
 from app.answers import AnswerPlacements
 from app.config import settings
 from app.main import app
@@ -215,7 +215,7 @@ def _check(node, path="$", unions=None):
 
 @pytest.mark.parametrize("shape", [ResumeAnalysis, AnswerPlacements])
 def test_schema_has_nothing_claude_rejects(shape):
-    unions = _check(claude_schema(shape.model_json_schema()))
+    unions = _check(claude_schema(require_all(shape.model_json_schema())))  # as sent
     assert len(unions) <= 16  # Claude's limit on union types
 
 
